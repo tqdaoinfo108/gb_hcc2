@@ -1,0 +1,33 @@
+{
+  "name": "@smart-kiosk/kiosk",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 3002",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 3002",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build --bundles msi",
+    "automation": "tsx automation/automation-service.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.9.0",
+    "@smart-kiosk/shared-types": "1.0.0",
+    "@tauri-apps/api": "^2.5.0",
+    "dotenv": "^16.5.0",
+    "next": "^15.3.3",
+    "playwright": "^1.52.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.8",
+    "@tauri-apps/cli": "^2.5.0",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "tailwindcss": "^4.1.8",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}
