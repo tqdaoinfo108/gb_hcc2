@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+:root {
+  --primary: #0068B7;
+}
+
+body {
+  background: #F8FAFC;
+  color: rgb(15 23 42);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+a { color: inherit; text-decoration: none; }
+
+.shell {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 256px 1fr;
+}
+
+.sidebar {
+  border-right: 1px solid rgb(226 232 240);
+  padding: 24px 16px;
+  background: #fff;
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  overflow-y: auto;
+}
+
+.content { padding: 28px 32px; }
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: rgb(71 85 105);
+  font-size: 14px;
+  font-weight: 600;
+  transition: background .15s, color .15s;
+}
+
+.nav-link:hover {
+  background: #EFF6FF;
+  color: #0068B7;
+}
+
+.primary-bg { background: var(--primary); }
+
+.cms-input {
+  width: 100%;
+  border: 1px solid rgb(203 213 225);
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 12px;
+  color: rgb(15 23 42);
+  font-size: 14px;
+  outline: none;
+}
+
+.cms-input:focus {
+  border-color: #0068B7;
+  box-shadow: 0 0 0 3px rgb(0 104 183 / 12%);
+}
+
+tr:hover td { background: #F8FAFC; }
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar { position: static; height: auto; }
+}

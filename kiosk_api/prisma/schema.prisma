@@ -1,0 +1,1966 @@
+// ═══════════════════════════════════════════════════════════════
+// Smart Government Kiosk Platform — Enterprise Database Schema
+// ═══════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 1 — KIOSK DEVICE & LOCATION
+// ════════════════════════════════════════════════════
+
+model KioskLocation {
+  id         String    @id @default(uuid())
+  code       String    @unique
+  name       String
+  address    String
+  district   String?
+  province   String?
+  lat        Float?
+  lng        Float?
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  devices    KioskDevice[]
+
+  @@map("kiosk_locations")
+}
+
+model KioskDevice {
+  id              String            @id @default(uuid())
+  deviceId        String            @unique
+  locationId      String
+  serialNumber    String            @unique
+  name            String?
+  placement       String?
+  isEnabled       Boolean           @default(true)
+  maintenanceMessage String?
+  tickerText      String?
+  model           String?
+  firmwareVersion String?
+  ipAddress       String?
+  macAddress      String?
+  status          KioskDeviceStatus @default(OFFLINE)
+  lastHeartbeat   DateTime?
+  installedAt     DateTime?
+  metadata        Json?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  deletedAt       DateTime?
+
+  location     KioskLocation    @relation(fields: [locationId], references: [id])
+  sessions     KioskSession[]
+  components   KioskComponent[]
+  healthLogs   KioskHealthLog[]
+  actions      KioskAction[]
+  queueTickets QueueTicket[]
+  statistics   KioskStatistic[]
+
+  @@index([locationId])
+  @@index([status])
+  @@map("kiosk_devices")
+}
+
+enum KioskDeviceStatus {
+  ONLINE
+  OFFLINE
+  MAINTENANCE
+  ERROR
+}
+
+model KioskComponent {
+  id          String          @id @default(uuid())
+  deviceId    String
+  type        ComponentType
+  name        String
+  status      ComponentStatus @default(UNKNOWN)
+  lastChecked DateTime?
+  metadata    Json?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  deletedAt   DateTime?
+
+  device KioskDevice @relation(fields: [deviceId], references: [id])
+
+  @@index([deviceId])
+  @@map("kiosk_components")
+}
+
+enum ComponentType {
+  CAMERA
+  SCANNER
+  PRINTER
+  NFC_READER
+  CARD_READER
+  SCREEN
+  NETWORK
+  AUDIO
+}
+
+enum ComponentStatus {
+  OK
+  WARNING
+  ERROR
+  UNKNOWN
+}
+
+model KioskHealthLog {
+  id             String            @id @default(uuid())
+  deviceId       String
+  cpuUsage       Float?
+  memoryUsage    Float?
+  diskUsage      Float?
+  temperatureC   Float?
+  networkLatency Int?
+  ipAddress      String?
+  hostname       String?
+  os             String?
+  browser        String?
+  appVersion     String?
+  screenResolution String?
+  userAgent      String?
+  currentScreen  String?
+  sessionId      String?
+  status         KioskDeviceStatus
+  components     Json?
+  createdAt      DateTime          @default(now())
+
+  device KioskDevice @relation(fields: [deviceId], references: [id])
+
+  @@index([deviceId])
+  @@index([createdAt])
+  @@map("kiosk_health_logs")
+}
+
+model KioskAction {
+  id          String   @id @default(uuid())
+  deviceId    String
+  adminId     String?
+  action      String
+  payload     Json?
+  result      String?
+  performedAt DateTime @default(now())
+
+  device KioskDevice @relation(fields: [deviceId], references: [id])
+
+  @@index([deviceId])
+  @@map("kiosk_actions")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 2 — KIOSK SESSION MANAGEMENT
+// ════════════════════════════════════════════════════
+
+model KioskSession {
+  id              String        @id @default(uuid())
+  deviceId        String
+  citizenId       String?
+  sessionToken    String        @unique @default(uuid())
+  currentScreen   String?
+  status          SessionStatus @default(ACTIVE)
+  language        String        @default("vi")
+  startTime       DateTime      @default(now())
+  endTime         DateTime?
+  lastActivityAt  DateTime      @default(now())
+  securityCleaned Boolean       @default(false)
+  cleanedAt       DateTime?
+  ipAddress       String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+
+  device          KioskDevice              @relation(fields: [deviceId], references: [id])
+  citizen         Citizen?                 @relation(fields: [citizenId], references: [id])
+  events          KioskSessionEvent[]
+  timeoutLogs     KioskSessionTimeoutLog[]
+  applications    Application[]
+  aiConversations AIConversation[]
+  queueTickets    QueueTicket[]
+  feedbacks       Feedback[]
+
+  @@index([deviceId])
+  @@index([citizenId])
+  @@index([status])
+  @@index([startTime])
+  @@map("kiosk_sessions")
+}
+
+enum SessionStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+  ERROR
+  TERMINATED
+}
+
+model KioskSessionEvent {
+  id        String   @id @default(uuid())
+  sessionId String
+  screen    String?
+  eventType String
+  eventData Json?
+  createdAt DateTime @default(now())
+
+  session KioskSession @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("kiosk_session_events")
+}
+
+model KioskSessionTimeoutLog {
+  id             String   @id @default(uuid())
+  sessionId      String
+  timeoutType    String
+  secondsElapsed Int
+  actionTaken    String?
+  createdAt      DateTime @default(now())
+
+  session KioskSession @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId])
+  @@map("kiosk_session_timeout_logs")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 3 — CITIZEN IDENTITY
+// ════════════════════════════════════════════════════
+
+model Citizen {
+  id             String    @id @default(uuid())
+  nationalId     String    @unique
+  fullName       String
+  dateOfBirth    DateTime?
+  gender         String?
+  phone          String?
+  email          String?
+  province       String?
+  district       String?
+  ward           String?
+  address        String?
+  vneidLinked    Boolean   @default(false)
+  vneidId        String?
+  isActive       Boolean   @default(true)
+  consentGiven   Boolean   @default(false)
+  consentAt      DateTime?
+  lastVerifiedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  profile       CitizenProfile?
+  verifications IdentityVerification[]
+  authLogs      AuthenticationLog[]
+  sessions      KioskSession[]
+  documents     DigitalDocument[]
+  applications  Application[]
+
+  @@index([nationalId])
+  @@map("citizens")
+}
+
+model CitizenProfile {
+  id             String    @id @default(uuid())
+  citizenId      String    @unique
+  avatarUrl      String?
+  occupation     String?
+  educationLevel String?
+  ethnicGroup    String?
+  religion       String?
+  metadata       Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  citizen Citizen @relation(fields: [citizenId], references: [id])
+
+  @@map("citizen_profiles")
+}
+
+model IdentityVerification {
+  id            String             @id @default(uuid())
+  citizenId     String
+  sessionId     String?
+  method        VerificationMethod
+  status        VerificationStatus @default(PENDING)
+  verifiedData  Json?
+  confidence    Float?
+  failureReason String?
+  verifiedAt    DateTime?
+  expiresAt     DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  deletedAt     DateTime?
+
+  citizen Citizen @relation(fields: [citizenId], references: [id])
+
+  @@index([citizenId])
+  @@index([method])
+  @@map("identity_verifications")
+}
+
+enum VerificationMethod {
+  CCCD_CHIP
+  CCCD_SCAN
+  VNEID_QR
+  FACE
+  MANUAL_STAFF
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  EXPIRED
+}
+
+model AuthenticationLog {
+  id         String             @id @default(uuid())
+  citizenId  String
+  sessionId  String?
+  method     VerificationMethod
+  success    Boolean
+  ipAddress  String?
+  deviceId   String?
+  failReason String?
+  createdAt  DateTime           @default(now())
+
+  citizen Citizen @relation(fields: [citizenId], references: [id])
+
+  @@index([citizenId])
+  @@index([createdAt])
+  @@map("authentication_logs")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 4 — DIGITAL DOCUMENT WALLET
+// ════════════════════════════════════════════════════
+
+model DocumentCategory {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  name      String
+  nameEn    String?
+  icon      String?
+  sortOrder Int       @default(0)
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  documents DigitalDocument[]
+
+  @@map("document_categories")
+}
+
+model DigitalDocument {
+  id                 String               @id @default(uuid())
+  ownerId            String
+  categoryId         String
+  title              String
+  documentType       String
+  documentNumber     String?
+  issuedBy           String?
+  issuedDate         DateTime?
+  expiryDate         DateTime?
+  verificationStatus DocVerificationStatus @default(UNVERIFIED)
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  isReusable         Boolean              @default(true)
+  isActive           Boolean              @default(true)
+  metadata           Json?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  deletedAt          DateTime?
+
+  owner           Citizen               @relation(fields: [ownerId], references: [id])
+  category        DocumentCategory      @relation(fields: [categoryId], references: [id])
+  versions        DocumentVersion[]
+  files           DocumentFile[]
+  accessLogs      DocumentAccessLog[]
+  applicationDocs ApplicationDocument[]
+
+  @@index([ownerId])
+  @@index([categoryId])
+  @@index([verificationStatus])
+  @@map("digital_documents")
+}
+
+enum DocVerificationStatus {
+  UNVERIFIED
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+model DocumentVersion {
+  id         String   @id @default(uuid())
+  documentId String
+  version    Int
+  changedBy  String?
+  changeNote String?
+  snapshot   Json
+  createdAt  DateTime @default(now())
+
+  document DigitalDocument @relation(fields: [documentId], references: [id])
+
+  @@index([documentId])
+  @@map("document_versions")
+}
+
+model DocumentFile {
+  id          String    @id @default(uuid())
+  documentId  String
+  fileName    String
+  mimeType    String
+  sizeBytes   Int?
+  storagePath String
+  bucketName  String
+  checksum    String?
+  isEncrypted Boolean   @default(true)
+  uploadedAt  DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  document DigitalDocument @relation(fields: [documentId], references: [id])
+
+  @@index([documentId])
+  @@map("document_files")
+}
+
+model DocumentAccessLog {
+  id           String   @id @default(uuid())
+  documentId   String
+  accessorId   String?
+  accessorType String?
+  action       String
+  sessionId    String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+
+  document DigitalDocument @relation(fields: [documentId], references: [id])
+
+  @@index([documentId])
+  @@index([createdAt])
+  @@map("document_access_logs")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 5 — ADMINISTRATIVE PROCEDURE MANAGEMENT
+// ════════════════════════════════════════════════════
+
+model ProcedureCategory {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  name      String
+  nameEn    String?
+  icon      String?
+  colorHex  String?
+  sortOrder Int       @default(0)
+  isActive  Boolean   @default(true)
+  parentId  String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  parent     ProcedureCategory?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children   ProcedureCategory[] @relation("CategoryTree")
+  procedures Procedure[]
+
+  @@map("procedure_categories")
+}
+
+model Procedure {
+  id               String    @id @default(uuid())
+  categoryId       String
+  code             String    @unique
+  name             String
+  nameEn           String?
+  description      String?
+  legalBasis       String?
+  processingAgency String?
+  slaWorkDays      Int       @default(5)
+  fee              Decimal?  @db.Decimal(15, 2)
+  feeNote          String?
+  isOnline         Boolean   @default(true)
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  category     ProcedureCategory      @relation(fields: [categoryId], references: [id])
+  versions     ProcedureVersion[]
+  requirements ProcedureRequirement[]
+  workflows    ProcedureWorkflow[]
+  applications Application[]
+
+  @@index([categoryId])
+  @@index([code])
+  @@map("procedures")
+}
+
+model ProcedureVersion {
+  id            String    @id @default(uuid())
+  procedureId   String
+  version       String
+  releaseNote   String?
+  isActive      Boolean   @default(true)
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  snapshot      Json
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  procedure Procedure @relation(fields: [procedureId], references: [id])
+
+  @@index([procedureId])
+  @@map("procedure_versions")
+}
+
+model ProcedureRequirement {
+  id              String    @id @default(uuid())
+  procedureId     String
+  documentType    String
+  documentName    String
+  description     String?
+  isRequired      Boolean   @default(true)
+  acceptedFormats String[]
+  maxFileSizeMB   Int       @default(10)
+  sortOrder       Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  procedure Procedure @relation(fields: [procedureId], references: [id])
+
+  @@index([procedureId])
+  @@map("procedure_requirements")
+}
+
+model ProcedureWorkflow {
+  id          String    @id @default(uuid())
+  procedureId String
+  stepOrder   Int
+  stepName    String
+  stepCode    String
+  description String?
+  assignedTo  String?
+  slaHours    Int?
+  isRequired  Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  procedure Procedure @relation(fields: [procedureId], references: [id])
+
+  @@index([procedureId])
+  @@map("procedure_workflows")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 6 — ONLINE APPLICATION (HỒ SƠ)
+// ════════════════════════════════════════════════════
+
+model Application {
+  id               String            @id @default(uuid())
+  sessionId        String
+  citizenId        String
+  procedureId      String
+  organizationId   String?
+  trackingCode     String            @unique
+  status           ApplicationStatus @default(DRAFT)
+  submittedAt      DateTime?
+  expectedResultAt DateTime?
+  completedAt      DateTime?
+  counterNumber    String?
+  processingNote   String?
+  rejectionReason  String?
+  formData         Json?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  deletedAt        DateTime?
+
+  session       KioskSession               @relation(fields: [sessionId], references: [id])
+  citizen       Citizen                    @relation(fields: [citizenId], references: [id])
+  procedure     Procedure                  @relation(fields: [procedureId], references: [id])
+  documents     ApplicationDocument[]
+  statusHistory ApplicationStatusHistory[]
+  receipts      SubmissionReceipt[]
+
+  @@index([citizenId])
+  @@index([sessionId])
+  @@index([procedureId])
+  @@index([status])
+  @@index([trackingCode])
+  @@map("applications")
+}
+
+enum ApplicationStatus {
+  DRAFT
+  PREPARING
+  SUBMITTED
+  PROCESSING
+  ADDITIONAL_INFO_REQUIRED
+  COMPLETED
+  REJECTED
+  CANCELLED
+  WITHDRAWN
+}
+
+model ApplicationDocument {
+  id                 String               @id @default(uuid())
+  applicationId      String
+  documentId         String?
+  requirementId      String?
+  fileName           String?
+  storagePath        String?
+  bucketName         String?
+  mimeType           String?
+  sizeBytes          Int?
+  verificationStatus DocVerificationStatus @default(UNVERIFIED)
+  uploadedAt         DateTime             @default(now())
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  deletedAt          DateTime?
+
+  application Application      @relation(fields: [applicationId], references: [id])
+  document    DigitalDocument? @relation(fields: [documentId], references: [id])
+
+  @@index([applicationId])
+  @@index([documentId])
+  @@map("application_documents")
+}
+
+model ApplicationStatusHistory {
+  id            String             @id @default(uuid())
+  applicationId String
+  fromStatus    ApplicationStatus?
+  toStatus      ApplicationStatus
+  changedBy     String?
+  note          String?
+  createdAt     DateTime           @default(now())
+
+  application Application @relation(fields: [applicationId], references: [id])
+
+  @@index([applicationId])
+  @@map("application_status_history")
+}
+
+model SubmissionReceipt {
+  id            String    @id @default(uuid())
+  applicationId String
+  receiptNumber String    @unique
+  receiptData   Json
+  printedAt     DateTime?
+  qrCode        String?
+  storagePath   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  application Application @relation(fields: [applicationId], references: [id])
+
+  @@index([applicationId])
+  @@map("submission_receipts")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 7 — KIOSK HOME SERVICE CONFIG
+// ════════════════════════════════════════════════════
+
+model KioskHomeService {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  name        String
+  nameEn      String?
+  description String?
+  icon        String?
+  colorHex    String?
+  bgColorHex  String?
+  screenId    String
+  badge       String?
+  sortOrder   Int       @default(0)
+  isVisible   Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@map("kiosk_home_services")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 8 — QUEUE MANAGEMENT
+// ════════════════════════════════════════════════════
+
+model QueueService {
+  id            String    @id @default(uuid())
+  code          String    @unique
+  name          String
+  nameEn        String?
+  description   String?
+  colorHex      String?
+  prefix        String    @default("A")
+  currentNumber Int       @default(0)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  counters    Counter[]
+  tickets     QueueTicket[]
+  dailyStats  QueueDailyStatistic[]
+
+  @@map("queue_services")
+}
+
+model Counter {
+  id              String        @id @default(uuid())
+  serviceId       String
+  number          String
+  name            String?
+  operatorId      String?
+  status          CounterStatus @default(CLOSED)
+  currentTicketId String?
+  openedAt        DateTime?
+  closedAt        DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+
+  service QueueService  @relation(fields: [serviceId], references: [id])
+  tickets QueueTicket[]
+
+  @@index([serviceId])
+  @@map("counters")
+}
+
+enum CounterStatus {
+  OPEN
+  BUSY
+  PAUSED
+  CLOSED
+}
+
+model QueueTicket {
+  id               String       @id @default(uuid())
+  serviceId        String
+  kioskId          String?
+  sessionId        String?
+  ticketNumber     Int
+  displayNumber    String
+  status           TicketStatus @default(WAITING)
+  counterId        String?
+  priority         Int          @default(0)
+  estimatedWaitMin Int?
+  issuedAt         DateTime     @default(now())
+  calledAt         DateTime?
+  servedAt         DateTime?
+  completedAt      DateTime?
+  missedAt         DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  deletedAt        DateTime?
+
+  service  QueueService  @relation(fields: [serviceId], references: [id])
+  device   KioskDevice?  @relation(fields: [kioskId], references: [id])
+  session  KioskSession? @relation(fields: [sessionId], references: [id])
+  counter  Counter?      @relation(fields: [counterId], references: [id])
+  events   QueueEvent[]
+
+  @@index([serviceId])
+  @@index([status])
+  @@index([issuedAt])
+  @@map("queue_tickets")
+}
+
+enum TicketStatus {
+  WAITING
+  CALLED
+  SERVING
+  COMPLETED
+  MISSED
+  CANCELLED
+}
+
+model QueueEvent {
+  id         String   @id @default(uuid())
+  ticketId   String
+  eventType  String
+  note       String?
+  operatorId String?
+  createdAt  DateTime @default(now())
+
+  ticket QueueTicket @relation(fields: [ticketId], references: [id])
+
+  @@index([ticketId])
+  @@map("queue_events")
+}
+
+model QueueDailyStatistic {
+  id              String   @id @default(uuid())
+  serviceId       String
+  date            DateTime @db.Date
+  totalIssued     Int      @default(0)
+  totalCompleted  Int      @default(0)
+  totalMissed     Int      @default(0)
+  avgWaitTimeMin  Float?
+  peakHour        Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  service QueueService @relation(fields: [serviceId], references: [id])
+
+  @@unique([serviceId, date])
+  @@map("queue_daily_statistics")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 9 — AI ASSISTANT
+// ════════════════════════════════════════════════════
+
+model AIConversation {
+  id          String    @id @default(uuid())
+  sessionId   String
+  citizenId   String?
+  language    String    @default("vi")
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  totalTokens Int?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  session         KioskSession       @relation(fields: [sessionId], references: [id])
+  messages        AIMessage[]
+  recommendations AIRecommendation[]
+
+  @@index([sessionId])
+  @@map("ai_conversations")
+}
+
+model AIMessage {
+  id             String      @id @default(uuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  inputType      String?
+  intent         String?
+  confidence     Float?
+  tokensUsed     Int?
+  responseTimeMs Int?
+  createdAt      DateTime    @default(now())
+
+  conversation AIConversation @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId])
+  @@map("ai_messages")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+model AIIntent {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  category    String?
+  description String?
+  examples    String[]
+  responses   Json?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@map("ai_intents")
+}
+
+model AIRecommendation {
+  id             String   @id @default(uuid())
+  conversationId String
+  procedureId    String?
+  title          String
+  description    String?
+  confidence     Float?
+  wasAccepted    Boolean?
+  createdAt      DateTime @default(now())
+
+  conversation AIConversation @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId])
+  @@map("ai_recommendations")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 9 — FEEDBACK
+// ════════════════════════════════════════════════════
+
+model FeedbackCategory {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  name      String
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  feedbacks Feedback[]
+
+  @@map("feedback_categories")
+}
+
+model Feedback {
+  id         String         @id @default(uuid())
+  sessionId  String
+  citizenId  String?
+  categoryId String?
+  targetType FeedbackTarget
+  targetId   String?
+  score      Int
+  starRating Int?
+  comment    String?
+  tags       String[]
+  language   String         @default("vi")
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  deletedAt  DateTime?
+
+  session  KioskSession      @relation(fields: [sessionId], references: [id])
+  category FeedbackCategory? @relation(fields: [categoryId], references: [id])
+  replies  FeedbackReply[]
+
+  @@index([sessionId])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@map("feedbacks")
+}
+
+enum FeedbackTarget {
+  SERVICE
+  OFFICER
+  KIOSK
+  APPLICATION
+  QUEUE
+  OVERALL
+}
+
+model FeedbackReply {
+  id         String    @id @default(uuid())
+  feedbackId String
+  adminId    String
+  content    String
+  repliedAt  DateTime  @default(now())
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  feedback Feedback @relation(fields: [feedbackId], references: [id])
+
+  @@index([feedbackId])
+  @@map("feedback_replies")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 10 — ADMIN USER MANAGEMENT (RBAC)
+// ════════════════════════════════════════════════════
+
+model Organization {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  name      String
+  level     OrgLevel
+  parentId  String?
+  address   String?
+  phone     String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  parent     Organization?  @relation("OrgTree", fields: [parentId], references: [id])
+  children   Organization[] @relation("OrgTree")
+  adminUsers AdminUser[]
+
+  @@map("organizations")
+}
+
+enum OrgLevel {
+  CENTRAL
+  PROVINCE
+  DISTRICT
+  COMMUNE
+}
+
+model AdminUser {
+  id                String    @id @default(uuid())
+  organizationId    String?
+  username          String    @unique
+  email             String    @unique
+  passwordHash      String
+  fullName          String
+  phone             String?
+  avatarUrl         String?
+  isActive          Boolean   @default(true)
+  isSuperAdmin      Boolean   @default(false)
+  lastLoginAt       DateTime?
+  lastLoginIp       String?
+  passwordChangedAt DateTime?
+  mfaEnabled        Boolean   @default(false)
+  refreshToken      String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
+
+  organization Organization?  @relation(fields: [organizationId], references: [id])
+  userRoles    UserRole[]
+  auditLogs    AdminAuditLog[]
+
+  @@index([organizationId])
+  @@map("admin_users")
+}
+
+model Role {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  name        String
+  description String?
+  isSystem    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  module      String
+  action      String
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  id         String    @id @default(uuid())
+  userId     String
+  roleId     String
+  assignedBy String?
+  assignedAt DateTime  @default(now())
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  user AdminUser @relation(fields: [userId], references: [id])
+  role Role      @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  adminId    String
+  action     String
+  module     String
+  targetId   String?
+  targetType String?
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  admin AdminUser @relation(fields: [adminId], references: [id])
+
+  @@index([adminId])
+  @@index([module])
+  @@index([createdAt])
+  @@map("admin_audit_logs")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 11 — EXTERNAL SYSTEM INTEGRATION
+// ════════════════════════════════════════════════════
+
+model ExternalSystem {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  name        String
+  baseUrl     String
+  authType    String?
+  isActive    Boolean   @default(true)
+  timeoutMs   Int       @default(5000)
+  retryCount  Int       @default(3)
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  connections APIConnection[]
+
+  @@map("external_systems")
+}
+
+model APIConnection {
+  id           String    @id @default(uuid())
+  systemId     String
+  name         String
+  endpoint     String
+  method       String    @default("POST")
+  isActive     Boolean   @default(true)
+  lastTestedAt DateTime?
+  lastStatus   String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  system ExternalSystem  @relation(fields: [systemId], references: [id])
+  logs   IntegrationLog[]
+
+  @@index([systemId])
+  @@map("api_connections")
+}
+
+model IntegrationLog {
+  id              String   @id @default(uuid())
+  connectionId    String
+  applicationId   String?
+  requestPayload  Json?
+  responsePayload Json?
+  statusCode      Int?
+  success         Boolean
+  errorMessage    String?
+  durationMs      Int?
+  retryCount      Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  connection APIConnection @relation(fields: [connectionId], references: [id])
+
+  @@index([connectionId])
+  @@index([createdAt])
+  @@map("integration_logs")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 12 — NOTIFICATIONS
+// ════════════════════════════════════════════════════
+
+model NotificationTemplate {
+  id           String              @id @default(uuid())
+  code         String              @unique
+  name         String
+  channel      NotificationChannel
+  language     String              @default("vi")
+  subject      String?
+  bodyTemplate String
+  variables    String[]
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  deletedAt    DateTime?
+
+  notifications Notification[]
+
+  @@map("notification_templates")
+}
+
+enum NotificationChannel {
+  SMS
+  EMAIL
+  KIOSK_SCREEN
+  QR_RECEIPT
+  PUSH
+}
+
+model Notification {
+  id            String             @id @default(uuid())
+  templateId    String?
+  recipientId   String?
+  channel       NotificationChannel
+  recipient     String
+  subject       String?
+  body          String
+  applicationId String?
+  status        NotificationStatus @default(PENDING)
+  sentAt        DateTime?
+  failReason    String?
+  retryCount    Int                @default(0)
+  scheduledAt   DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  deletedAt     DateTime?
+
+  template NotificationTemplate? @relation(fields: [templateId], references: [id])
+  logs     NotificationLog[]
+
+  @@index([recipientId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+model NotificationLog {
+  id             String   @id @default(uuid())
+  notificationId String
+  attempt        Int
+  success        Boolean
+  response       String?
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id])
+
+  @@index([notificationId])
+  @@map("notification_logs")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 13 — REPORTING & STATISTICS
+// ════════════════════════════════════════════════════
+
+model DailyStatistic {
+  id                   String    @id @default(uuid())
+  date                 DateTime  @db.Date
+  organizationId       String?
+  totalSessions        Int       @default(0)
+  totalApplications    Int       @default(0)
+  totalSubmitted       Int       @default(0)
+  totalCompleted       Int       @default(0)
+  totalRejected        Int       @default(0)
+  totalQueueTickets    Int       @default(0)
+  avgSatisfactionScore Float?
+  avgSessionMinutes    Float?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@unique([date, organizationId])
+  @@index([date])
+  @@map("daily_statistics")
+}
+
+model ServiceStatistic {
+  id                   String   @id @default(uuid())
+  procedureId          String
+  date                 DateTime @db.Date
+  totalApplications    Int      @default(0)
+  totalCompleted       Int      @default(0)
+  totalRejected        Int      @default(0)
+  avgProcessingDays    Float?
+  avgSatisfactionScore Float?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([procedureId, date])
+  @@index([procedureId])
+  @@index([date])
+  @@map("service_statistics")
+}
+
+model KioskStatistic {
+  id                String   @id @default(uuid())
+  deviceId          String
+  date              DateTime @db.Date
+  uptimeMinutes     Int      @default(0)
+  totalSessions     Int      @default(0)
+  totalInteractions Int      @default(0)
+  errorCount        Int      @default(0)
+  avgResponseMs     Float?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  device KioskDevice @relation(fields: [deviceId], references: [id])
+
+  @@unique([deviceId, date])
+  @@index([deviceId])
+  @@index([date])
+  @@map("kiosk_statistics")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 14 — SELENIUM WORKFLOW AUTOMATION ENGINE
+// ════════════════════════════════════════════════════
+
+/// CMS-managed workflow template tied to an administrative procedure.
+/// Defines which portal URL, auth method, and step sequence to use.
+model WorkflowTemplate {
+  id              String               @id @default(uuid())
+  procedureId     String?
+  code            String               @unique
+  name            String
+  description     String?
+  targetUrl       String               // The government portal URL to automate
+  portalCode      String?              // e.g. "CONG_DICH_VU_CONG", "DVC_QUOC_GIA"
+  authMethod      WorkflowAuthMethod   @default(NONE)
+  isActive        Boolean              @default(true)
+  isPublished     Boolean              @default(false)
+  timeoutSeconds  Int                  @default(120)
+  maxRetries      Int                  @default(2)
+  screenshotMode  ScreenshotMode       @default(ON_ERROR)
+  configJson      Json?                // Extra portal-specific configs
+  version         Int                  @default(1)
+  publishedAt     DateTime?
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  deletedAt       DateTime?
+
+  steps    WorkflowStep[]
+  jobs     SeleniumJob[]
+
+  @@index([procedureId])
+  @@map("workflow_templates")
+}
+
+enum WorkflowAuthMethod {
+  NONE
+  VNEID_QR
+  CCCD_CHIP
+  USERNAME_PASSWORD
+  OTP_SMS
+  SSO_TOKEN
+}
+
+enum ScreenshotMode {
+  NEVER
+  ON_ERROR
+  ON_EACH_STEP
+  ALWAYS
+}
+
+/// Individual step inside a WorkflowTemplate. Steps are ordered and typed.
+/// CMS drag-and-drop builder writes rows here.
+model WorkflowStep {
+  id            String           @id @default(uuid())
+  templateId    String
+  stepOrder     Int
+  stepType      WorkflowStepType
+  name          String
+  description   String?
+  isRequired    Boolean          @default(true)
+
+  // Navigation
+  url           String?
+  waitFor       String?          // CSS selector / XPath to wait for before acting
+  waitTimeoutMs Int              @default(10000)
+
+  // Element targeting (multiple strategies, tried in order)
+  selector      String?          // Primary CSS/XPath selector
+  selectorAlt   String?          // Fallback selector
+  selectorType  SelectorType     @default(CSS)
+
+  // Actions
+  action        StepAction       @default(NONE)
+  inputValue    String?          // Static value or {{citizen.field}} template
+  inputMapping  Json?            // Map citizen profile fields → form fields
+  uploadField   String?          // Field name for file upload
+
+  // Validation
+  assertText    String?          // Text that must exist after action
+  assertUrl     String?          // URL pattern after navigation
+  assertVisible String?          // Selector that must be visible
+
+  // Control flow
+  onFailure     StepFailureAction @default(STOP)
+  retryCount    Int              @default(1)
+  delayAfterMs  Int              @default(500)
+
+  conditionExpr String?          // JS expression evaluated in browser context
+  metadata      Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  template WorkflowTemplate @relation(fields: [templateId], references: [id])
+
+  @@index([templateId, stepOrder])
+  @@map("workflow_steps")
+}
+
+enum WorkflowStepType {
+  NAVIGATE           // Go to URL
+  CLICK              // Click element
+  FILL               // Type into input
+  SELECT             // Select dropdown option
+  UPLOAD             // Upload file
+  WAIT               // Wait for element/condition
+  SCREENSHOT         // Capture screenshot
+  ASSERT             // Validate page state
+  EXTRACT            // Pull data from page
+  SCROLL             // Scroll element into view
+  IFRAME_ENTER       // Switch into iframe
+  IFRAME_EXIT        // Return to main frame
+  CAPTCHA_WAIT       // Pause for human CAPTCHA solving
+  CUSTOM_SCRIPT      // Execute JS snippet
+}
+
+enum SelectorType {
+  CSS
+  XPATH
+  ID
+  NAME
+  TEXT
+  LINK_TEXT
+}
+
+enum StepAction {
+  NONE
+  CLICK
+  DOUBLE_CLICK
+  RIGHT_CLICK
+  FILL
+  CLEAR
+  SELECT_OPTION
+  HOVER
+  SCROLL_TO
+  KEY_PRESS
+  SUBMIT
+}
+
+enum StepFailureAction {
+  STOP              // Abort job immediately
+  RETRY             // Retry this step
+  SKIP              // Skip and continue
+  SCREENSHOT_STOP   // Screenshot then stop
+}
+
+/// A Selenium runner instance (one per physical server/VM).
+/// Runners self-register via POST /selenium/runners/register
+model SeleniumRunner {
+  id               String            @id @default(uuid())
+  runnerId         String            @unique   // e.g. "runner-01"
+  name             String
+  host             String
+  port             Int               @default(4444)
+  status           RunnerStatus      @default(OFFLINE)
+  capacity         Int               @default(5)  // max concurrent sessions
+  activeSessions   Int               @default(0)
+  browserType      BrowserType       @default(CHROMIUM)
+  version          String?
+  lastHeartbeatAt  DateTime?
+  registeredAt     DateTime          @default(now())
+  metadata         Json?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  deletedAt        DateTime?
+
+  sessions SeleniumSession[]
+  jobs     SeleniumJob[]
+
+  @@map("selenium_runners")
+}
+
+enum RunnerStatus {
+  ONLINE
+  BUSY
+  OFFLINE
+  ERROR
+  DRAINING
+}
+
+enum BrowserType {
+  CHROMIUM
+  FIREFOX
+  WEBKIT
+}
+
+/// An isolated browser session created per kiosk session.
+/// 1 kiosk session → 1 selenium session (browser context).
+model SeleniumSession {
+  id              String              @id @default(uuid())
+  runnerId        String
+  kioskSessionId  String
+  browserContextId String?            // Playwright/Selenium context ID
+  status          SeleniumSessionStatus @default(CREATED)
+  createdAt       DateTime            @default(now())
+  destroyedAt     DateTime?
+  cleanedAt       DateTime?
+
+  runner SeleniumRunner @relation(fields: [runnerId], references: [id])
+  jobs   SeleniumJob[]
+
+  @@index([runnerId])
+  @@index([kioskSessionId])
+  @@map("selenium_sessions")
+}
+
+enum SeleniumSessionStatus {
+  CREATED
+  ACTIVE
+  COMPLETED
+  DESTROYED
+  ERROR
+}
+
+/// A single workflow execution job.
+model SeleniumJob {
+  id              String        @id @default(uuid())
+  templateId      String
+  seleniumSessionId String?
+  runnerId        String?
+  applicationId   String?
+  citizenId       String?
+  kioskSessionId  String?
+  status          JobStatus     @default(PENDING)
+  priority        Int           @default(5)
+  inputData       Json?         // Citizen profile + form data + document refs
+  outputData      Json?         // Extracted data, result URLs, confirmation numbers
+  currentStepId   String?
+  currentStepOrder Int          @default(0)
+  progressPercent Int           @default(0)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  failedAt        DateTime?
+  failReason      String?
+  retryCount      Int           @default(0)
+  scheduledAt     DateTime      @default(now())
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  template        WorkflowTemplate  @relation(fields: [templateId], references: [id])
+  seleniumSession SeleniumSession?  @relation(fields: [seleniumSessionId], references: [id])
+  runner          SeleniumRunner?   @relation(fields: [runnerId], references: [id])
+  logs            SeleniumJobLog[]
+  screenshots     SeleniumScreenshot[]
+
+  @@index([status, scheduledAt])
+  @@index([kioskSessionId])
+  @@index([runnerId])
+  @@map("selenium_jobs")
+}
+
+enum JobStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+  RETRYING
+}
+
+model SeleniumJobLog {
+  id         String      @id @default(uuid())
+  jobId      String
+  stepOrder  Int?
+  stepName   String?
+  level      LogLevel    @default(INFO)
+  message    String
+  detail     Json?
+  durationMs Int?
+  createdAt  DateTime    @default(now())
+
+  job SeleniumJob @relation(fields: [jobId], references: [id])
+
+  @@index([jobId, createdAt])
+  @@map("selenium_job_logs")
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+}
+
+model SeleniumScreenshot {
+  id          String   @id @default(uuid())
+  jobId       String
+  stepOrder   Int?
+  stepName    String?
+  storagePath String
+  bucketName  String?
+  sizeBytes   Int?
+  capturedAt  DateTime @default(now())
+
+  job SeleniumJob @relation(fields: [jobId], references: [id])
+
+  @@index([jobId])
+  @@map("selenium_screenshots")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 15 — AI WORKER SYSTEM
+// ════════════════════════════════════════════════════
+
+/// AI worker process registration. Each worker is a separate process/container.
+model AIWorker {
+  id              String         @id @default(uuid())
+  workerId        String         @unique  // e.g. "ai-worker-01"
+  name            String
+  host            String?
+  port            Int?
+  status          WorkerStatus   @default(OFFLINE)
+  capacity        Int            @default(10)  // max concurrent AI jobs
+  activeJobs      Int            @default(0)
+  modelType       String?        // e.g. "GPT-4o", "Gemini-1.5", "Local-Llama"
+  capabilities    String[]       // ["INTENT", "QA", "PROCEDURE_MATCH", "DOC_ANALYZE"]
+  version         String?
+  lastHeartbeatAt DateTime?
+  registeredAt    DateTime       @default(now())
+  totalJobsHandled Int           @default(0)
+  avgResponseMs   Float?
+  errorRate       Float          @default(0)
+  metadata        Json?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  deletedAt       DateTime?
+
+  jobs AIJob[]
+
+  @@map("ai_workers")
+}
+
+enum WorkerStatus {
+  ONLINE
+  BUSY
+  OFFLINE
+  ERROR
+  DRAINING
+}
+
+/// An AI processing job assigned to a specific worker.
+model AIJob {
+  id             String      @id @default(uuid())
+  workerId       String?
+  conversationId String?
+  sessionId      String?
+  jobType        AIJobType
+  status         JobStatus   @default(PENDING)
+  priority       Int         @default(5)
+  inputPayload   Json        // The request data
+  outputPayload  Json?       // The response data
+  modelUsed      String?
+  tokensIn       Int?
+  tokensOut      Int?
+  responseTimeMs Int?
+  failReason     String?
+  retryCount     Int         @default(0)
+  scheduledAt    DateTime    @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  worker AIWorker? @relation(fields: [workerId], references: [id])
+
+  @@index([status, scheduledAt])
+  @@index([workerId])
+  @@index([jobType])
+  @@map("ai_jobs")
+}
+
+enum AIJobType {
+  INTENT_DETECTION       // Classify citizen intent from text/voice
+  PROCEDURE_MATCH        // Find relevant procedures
+  QA_RESPONSE            // Answer citizen question
+  DOCUMENT_ANALYZE       // Analyze uploaded document image
+  DOCUMENT_BOUNDARY      // Detect document corners in image
+  OCR_EXTRACT            // Extract text from document image
+  IMAGE_ENHANCE          // Enhance document image quality
+  TRANSLATION            // Translate content
+  SENTIMENT_ANALYSIS     // Analyze feedback sentiment
+  SUMMARY                // Summarize content
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 16 — SAO Y (ELECTRONIC DOCUMENT COPY)
+// ════════════════════════════════════════════════════
+
+/// CMS-managed document category catalog with pricing rules.
+model CopyDocCategory {
+  id             String    @id @default(uuid())
+  code           String    @unique
+  name           String
+  nameEn         String?
+  description    String?
+  icon           String?
+  colorHex       String?
+  sortOrder      Int       @default(0)
+  isActive       Boolean   @default(true)
+  // Pricing
+  pricePerCopy   Decimal   @db.Decimal(15, 2) @default(0)
+  processingFeeRate Decimal @db.Decimal(5, 4) @default(0.1) // 10% default
+  maxCopiesPerRequest Int  @default(10)
+  // Legal
+  legalBasis     String?
+  validityDays   Int       @default(0)  // 0 = no expiry
+  requiresStamp  Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  requests CopyDocRequest[]
+  feeRules CopyDocFeeRule[]
+
+  @@map("copy_doc_categories")
+}
+
+/// Tiered/override fee rules for a category. Evaluated top-to-bottom.
+model CopyDocFeeRule {
+  id           String          @id @default(uuid())
+  categoryId   String
+  ruleName     String
+  minQuantity  Int             @default(1)
+  maxQuantity  Int?
+  pricePerCopy Decimal         @db.Decimal(15, 2)
+  feeType      CopyDocFeeType  @default(FIXED)
+  isActive     Boolean         @default(true)
+  effectiveFrom DateTime       @default(now())
+  effectiveTo  DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  category CopyDocCategory @relation(fields: [categoryId], references: [id])
+
+  @@index([categoryId])
+  @@map("copy_doc_fee_rules")
+}
+
+enum CopyDocFeeType {
+  FIXED          // flat price per copy
+  PROGRESSIVE    // price drops per tier
+  EXEMPT         // free (e.g. social policy)
+}
+
+/// The main copy request created when citizen starts the sao-y service.
+model CopyDocRequest {
+  id             String              @id @default(uuid())
+  categoryId     String
+  sessionId      String
+  citizenId      String?
+  kioskDeviceId  String?
+  requestCode    String              @unique  // e.g. SY-2026-12345
+  status         CopyRequestStatus   @default(INITIATED)
+  quantity       Int                 @default(1)
+  baseFee        Decimal             @db.Decimal(15, 2) @default(0)
+  processingFee  Decimal             @db.Decimal(15, 2) @default(0)
+  totalFee       Decimal             @db.Decimal(15, 2) @default(0)
+  feeConfirmedAt DateTime?
+  paymentRef     String?
+  receiptCode    String?             @unique
+  digitalDocId   String?             // Link to saved DigitalDocument
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  completedAt    DateTime?
+  deletedAt      DateTime?
+
+  category       CopyDocCategory      @relation(fields: [categoryId], references: [id])
+  scanSessions   MobileScanSession[]
+  aiJobs         DocAIProcessingJob[]
+  printJobs      PrintJob[]
+  feeTransaction FeeTransaction?
+
+  @@index([sessionId])
+  @@index([status])
+  @@map("copy_doc_requests")
+}
+
+enum CopyRequestStatus {
+  INITIATED          // Request created, QR shown
+  SCAN_PENDING       // Waiting for mobile scan
+  SCAN_IN_PROGRESS   // Mobile connected, uploading
+  SCAN_COMPLETE      // Images received
+  AI_PROCESSING      // AI analysing images
+  PREVIEW_READY      // Corners detected, showing preview
+  ADJUSTED           // Citizen confirmed crop
+  FEE_PENDING        // Showing fee, waiting confirmation
+  FEE_CONFIRMED      // Citizen confirmed payment
+  GENERATING_PDF     // Creating electronic copy
+  PRINT_QUEUED       // Sent to printer queue
+  PRINTING           // Printing in progress
+  COMPLETED          // Printed and saved to wallet
+  FAILED             // Terminal failure
+  CANCELLED          // Citizen cancelled
+}
+
+/// Mobile QR scan session — tracks the temporary link used to connect
+/// the citizen's phone to the kiosk copy request.
+model MobileScanSession {
+  id            String              @id @default(uuid())
+  requestId     String
+  sessionToken  String              @unique @default(uuid())
+  qrPayload     String              // URL encoded in QR
+  status        ScanSessionStatus   @default(PENDING)
+  mobileUA      String?             // Mobile browser user-agent
+  mobileIp      String?
+  connectedAt   DateTime?
+  uploadedAt    DateTime?
+  expiresAt     DateTime
+  scanImages    Json?               // Array of {url, side, uploadedAt}
+  rawImagePaths String[]            // Storage paths before processing
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  request CopyDocRequest @relation(fields: [requestId], references: [id])
+
+  @@index([requestId])
+  @@map("mobile_scan_sessions")
+}
+
+enum ScanSessionStatus {
+  PENDING        // QR generated, not yet scanned
+  CONNECTED      // Mobile opened the link
+  UPLOADING      // Images being uploaded
+  COMPLETE       // All images received
+  EXPIRED        // Token expired
+  ERROR
+}
+
+/// AI Document processing job for image analysis, boundary detection, enhancement.
+/// Each request may spawn multiple jobs (1 per image or per AI task type).
+model DocAIProcessingJob {
+  id             String           @id @default(uuid())
+  requestId      String
+  aiJobId        String?          // Links to AIJob for routing/tracking
+  jobType        AIJobType        @default(DOCUMENT_ANALYZE)
+  inputImagePath String
+  status         JobStatus        @default(PENDING)
+  // Raw AI output
+  detectedType   String?          // e.g. "CCCD", "BIRTH_CERTIFICATE"
+  confidence     Float?
+  boundaryPoints Json?            // [{x,y}] 4 corners in pixel coords
+  enhancedPath   String?          // Storage path of enhanced image
+  ocrText        String?          // Extracted text (internal only)
+  metadata       Json?
+  errorMessage   String?
+  processedAt    DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  request CopyDocRequest @relation(fields: [requestId], references: [id])
+
+  @@index([requestId])
+  @@map("doc_ai_processing_jobs")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 17 — PRINT & FEE TRANSACTIONS
+// ════════════════════════════════════════════════════
+
+model PrintJob {
+  id              String        @id @default(uuid())
+  copyRequestId   String?
+  kioskDeviceId   String?
+  sessionId       String?
+  jobType         PrintJobType  @default(DOCUMENT_COPY)
+  status          PrintStatus   @default(QUEUED)
+  filePath        String?       // PDF path to print
+  copies          Int           @default(1)
+  printerName     String?
+  printerStatus   String?
+  sentAt          DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  failReason      String?
+  retryCount      Int           @default(0)
+  outputPageCount Int?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  copyRequest CopyDocRequest? @relation(fields: [copyRequestId], references: [id])
+
+  @@index([status])
+  @@index([kioskDeviceId])
+  @@map("print_jobs")
+}
+
+enum PrintJobType {
+  DOCUMENT_COPY
+  SUBMISSION_RECEIPT
+  QUEUE_TICKET
+  REPORT
+}
+
+enum PrintStatus {
+  QUEUED
+  READY_TO_PRINT
+  PRINTING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model FeeTransaction {
+  id              String              @id @default(uuid())
+  copyRequestId   String?             @unique
+  transactionRef  String              @unique @default(uuid())
+  citizenId       String?
+  amount          Decimal             @db.Decimal(15, 2)
+  currency        String              @default("VND")
+  paymentMethod   PaymentMethod       @default(CASH)
+  status          PaymentStatus       @default(PENDING)
+  confirmedAt     DateTime?
+  confirmedBy     String?             // Admin/operator who confirmed
+  receiptNumber   String?             @unique
+  metadata        Json?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  copyRequest CopyDocRequest? @relation(fields: [copyRequestId], references: [id])
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("fee_transactions")
+}
+
+enum PaymentMethod {
+  CASH
+  VNPAY
+  MOMO
+  BANKING
+  WAIVED    // Exempt / free
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  REFUNDED
+  WAIVED
+}

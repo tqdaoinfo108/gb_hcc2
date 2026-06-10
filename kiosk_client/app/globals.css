@@ -1,0 +1,167 @@
+/* ═══ Design Tokens ═══════════════════════════════════════ */
+:root {
+  --blue:      #0068B7;
+  --blue-dk:   #004F8C;
+  --blue-lt:   #E8F2FB;
+  --blue-mid:  #D0E6F8;
+  --teal:      #00A6A6;
+  --teal-dk:   #007A7A;
+  --teal-lt:   #E0F5F5;
+  --orange:    #F59E0B;
+  --orange-dk: #D97706;
+  --orange-lt: #FEF3C7;
+  --green:     #16A34A;
+  --green-lt:  #DCFCE7;
+  --red:       #DC2626;
+  --red-lt:    #FEE2E2;
+  --purple:    #6D28D9;
+  --purple-lt: #EDE9FE;
+  /* Ink scale */
+  --ink-0: #0F172A;
+  --ink-1: #1E293B;
+  --ink-2: #334155;
+  --ink-3: #475569;
+  --ink-4: #64748B;
+  --ink-5: #94A3B8;
+  --ink-6: #CBD5E1;
+  --ink-7: #E2E8F0;
+  --ink-8: #F1F5F9;
+  --ink-9: #F8FAFC;
+  /* Shadows */
+  --shadow-sm: 0 1px 4px rgba(15,23,42,.06);
+  --shadow-md: 0 4px 16px rgba(15,23,42,.08);
+  --shadow-lg: 0 8px 32px rgba(15,23,42,.12);
+  --shadow-xl: 0 16px 48px rgba(15,23,42,.16);
+}
+
+/* ═══ Reset ════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #__next { height: 100%; overflow: hidden; }
+body {
+  font-family: 'Be Vietnam Pro', system-ui, sans-serif;
+  color: var(--ink-1);
+  background: #0F172A;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+  -webkit-user-select: none;
+}
+button { cursor: pointer; font: inherit; border: none; background: none; }
+
+/* ═══ Canvas stage ═════════════════════════════════════════ */
+#stage { position: fixed; inset: 0; overflow: hidden; }
+#canvas {
+  position: absolute;
+  width: 1920px;
+  height: 1080px;
+  background: var(--ink-8);
+  overflow: hidden;
+}
+
+/* ═══ Buttons ══════════════════════════════════════════════ */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  border: none; cursor: pointer; font-family: inherit; font-weight: 600;
+  border-radius: 14px; transition: transform .15s, box-shadow .15s, background .15s;
+  white-space: nowrap; flex-shrink: 0;
+}
+.btn:active { transform: scale(0.96); }
+.btn-primary  { background: var(--blue);   color: #fff; box-shadow: 0 4px 16px rgba(0,104,183,.3); }
+.btn-primary:hover  { background: var(--blue-dk); box-shadow: 0 6px 20px rgba(0,104,183,.4); }
+.btn-teal     { background: var(--teal);   color: #fff; box-shadow: 0 4px 16px rgba(0,166,166,.3); }
+.btn-orange   { background: var(--orange); color: #fff; box-shadow: 0 4px 16px rgba(245,158,11,.3); }
+.btn-green    { background: var(--green);  color: #fff; box-shadow: 0 4px 16px rgba(22,163,74,.3); }
+.btn-ghost    { background: transparent; border: 2px solid var(--ink-6); color: var(--ink-2); }
+.btn-ghost:hover { border-color: var(--blue); color: var(--blue); }
+.btn-soft     { background: var(--blue-lt); color: var(--blue); }
+.btn-soft:hover { background: var(--blue-mid); }
+.btn-xl   { height: 80px; padding: 0 48px; font-size: 22px; border-radius: 18px; }
+.btn-lg   { height: 64px; padding: 0 40px; font-size: 20px; border-radius: 16px; }
+.btn-md   { height: 52px; padding: 0 28px; font-size: 17px; }
+.btn-sm   { height: 40px; padding: 0 20px; font-size: 15px; border-radius: 10px; }
+
+/* ═══ Cards ════════════════════════════════════════════════ */
+.card {
+  background: #fff;
+  border-radius: 20px;
+  border: 1.5px solid var(--ink-7);
+  box-shadow: var(--shadow-md);
+  transition: border-color .2s, box-shadow .2s, transform .2s;
+}
+.card-hover:hover {
+  border-color: var(--ink-6);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+}
+.card-hover:active { transform: scale(0.98); }
+
+/* ═══ Pill / Tag ═══════════════════════════════════════════ */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 16px; border-radius: 999px;
+  font-size: 14px; font-weight: 600;
+}
+
+/* ═══ Status tags ══════════════════════════════════════════ */
+.tag { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+.tag-verified  { background: var(--green-lt); color: var(--green); }
+.tag-available { background: var(--blue-lt);  color: var(--blue); }
+.tag-missing   { background: var(--red-lt);   color: var(--red); }
+.tag-done      { background: var(--green-lt); color: var(--green); }
+.tag-pending   { background: var(--orange-lt);color: var(--orange-dk); }
+.tag-received  { background: var(--blue-lt);  color: var(--blue); }
+
+/* ═══ Keyframes ════════════════════════════════════════════ */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scanline {
+  0%   { top: 6px; }
+  100% { top: calc(100% - 6px); }
+}
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.3); }
+  50%       { transform: scaleY(1); }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pop {
+  0%   { transform: scale(0.8); opacity: 0; }
+  60%  { transform: scale(1.06); }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-10px); }
+}
+@keyframes pulseRing {
+  0%   { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+@keyframes ticker {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.25; }
+}
+@keyframes growBar {
+  from { width: 0; }
+  to   { width: 100%; }
+}
+@keyframes paperOut {
+  0%   { height: 0px;  opacity: 0; }
+  20%  { height: 48px; opacity: 1; }
+  80%  { height: 48px; opacity: 1; }
+  100% { height: 0px;  opacity: 0; }
+}
+
+/* ═══ Screen animation ══════════════════════════════════════ */
+.screen-enter { animation: fadeIn .25s ease both; }
+
+/* ═══ Scrollbar ════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--ink-6); border-radius: 999px; }

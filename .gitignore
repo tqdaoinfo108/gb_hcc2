@@ -12,3 +12,6 @@ out/
 *.log
 .secrets/
 *.key
+
+# Per-machine kiosk identity — each physical device has its own copy, never commit
+device.json
