@@ -8,6 +8,20 @@ import { CitizenInputDto, DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddS
 /** In-memory store for pending citizen input per jobId */
 const citizenInputStore = new Map<string, CitizenInputDto | 'waiting'>();
 
+/** Interaction events (taps/keys/scroll) queued from kiosk → drained by runner */
+export interface InteractionEvent {
+  type: 'click' | 'touchStart' | 'touchMove' | 'touchEnd' | 'type' | 'key' | 'scroll' | 'finish';
+  x?: number;
+  y?: number;
+  text?: string;
+  key?: string;
+  deltaX?: number;
+  deltaY?: number;
+}
+const interactionStore = new Map<string, InteractionEvent[]>();
+/** Cache deviceSerial per job to avoid a DB hit on every focus report */
+const jobDeviceCache = new Map<string, string>();
+
 @Injectable()
 export class SeleniumJobService {
   constructor(
@@ -97,6 +111,9 @@ export class SeleniumJobService {
       });
     }
 
+    // Cache deviceSerial for fast interactive-focus push
+    if (dto.deviceSerial) jobDeviceCache.set(job.id, dto.deviceSerial);
+
     return job;
   }
 
@@ -126,6 +143,11 @@ export class SeleniumJobService {
 
     const updated = await this.prisma.seleniumJob.update({ where: { id: job.id }, data });
 
+    // On success, persist a citizen-facing Application tracking record
+    if (dto.status === JobStatus.COMPLETED) {
+      await this.persistApplication(job, dto.outputData).catch(() => undefined);
+    }
+
     // Push real-time progress to the originating kiosk device
     const inputData = (job.inputData ?? {}) as Record<string, unknown>;
     const deviceSerial = inputData['deviceSerial'] as string | undefined;
@@ -148,6 +170,41 @@ export class SeleniumJobService {
     });
 
     return updated;
+  }
+
+  /**
+   * Persist an Application tracking row when a submission workflow succeeds.
+   * Best-effort: requires a citizen + procedure; uses the extracted code as
+   * the tracking code. Skipped silently if prerequisites are missing.
+   */
+  private async persistApplication(
+    job: { id: string; citizenId: string | null; kioskSessionId: string | null; inputData: unknown },
+    outputData?: Record<string, unknown>,
+  ) {
+    const input = (job.inputData ?? {}) as Record<string, unknown>;
+    const procedureId = input['procedureId'] as string | undefined;
+    const code = (outputData?.['applicationCode'] as string | undefined)?.trim();
+    if (!job.citizenId || !job.kioskSessionId || !procedureId) return;
+
+    const trackingCode = code && code.length > 0
+      ? code
+      : `KIOSK-${Date.now().toString(36).toUpperCase()}`;
+
+    // Avoid duplicate tracking codes
+    const existing = await this.prisma.application.findUnique({ where: { trackingCode } });
+    if (existing) return;
+
+    await this.prisma.application.create({
+      data: {
+        sessionId: job.kioskSessionId,
+        citizenId: job.citizenId,
+        procedureId,
+        trackingCode,
+        status: 'SUBMITTED',
+        submittedAt: new Date(),
+        formData: (outputData ?? {}) as Prisma.InputJsonValue,
+      },
+    });
   }
 
   /** Runner calls this when it needs citizen input (OTP, VNeID, CAPTCHA, confirm) */
@@ -197,6 +254,42 @@ export class SeleniumJobService {
     return entry;
   }
 
+  // ─── Interactive remote control (kiosk taps/keys → runner browser) ──────────
+
+  /** Kiosk enqueues a tap/key/scroll event. Hot path — no DB hit. */
+  enqueueInteraction(id: string, event: InteractionEvent) {
+    const arr = interactionStore.get(id) ?? [];
+    const last = arr[arr.length - 1];
+    if (event.type === 'touchMove' && last?.type === 'touchMove') {
+      arr[arr.length - 1] = event;
+    } else if (event.type === 'scroll' && last?.type === 'scroll') {
+      last.deltaX = (last.deltaX ?? 0) + (event.deltaX ?? 0);
+      last.deltaY = (last.deltaY ?? 0) + (event.deltaY ?? 0);
+    } else {
+      arr.push(event);
+    }
+    if (arr.length > 64) arr.splice(0, arr.length - 64);
+    interactionStore.set(id, arr);
+    return { queued: arr.length };
+  }
+
+  /** Runner drains all pending interaction events (short-poll). */
+  drainInteractions(id: string): InteractionEvent[] {
+    const arr = interactionStore.get(id) ?? [];
+    if (arr.length) interactionStore.set(id, []);
+    return arr;
+  }
+
+  /** Runner reports whether the element focused after a tap is a text input,
+   *  so the kiosk can auto-show / hide the on-screen keyboard. */
+  reportInputFocus(id: string, focused: boolean) {
+    const deviceSerial = jobDeviceCache.get(id);
+    if (deviceSerial) {
+      this.realtime.sendToDevice(deviceSerial, 'selenium:input_focus', { jobId: id, focused });
+    }
+    return { ok: true };
+  }
+
   async cancel(id: string) {
     return this.updateStatus(id, { status: JobStatus.CANCELLED });
   }
@@ -238,16 +331,39 @@ export class SeleniumJobService {
   }
 
   async addScreenshot(jobId: string, dto: AddScreenshotDto) {
-    return this.prisma.seleniumScreenshot.create({
-      data: {
-        jobId,
-        storagePath: dto.storagePath,
-        bucketName: dto.bucketName,
-        stepOrder: dto.stepOrder,
-        stepName: dto.stepName,
-        sizeBytes: dto.sizeBytes,
-      },
-    });
+    const shot = dto.isLive
+      ? null
+      : await this.prisma.seleniumScreenshot.create({
+          data: {
+            jobId,
+            storagePath: dto.storagePath,
+            bucketName: dto.bucketName,
+            stepOrder: dto.stepOrder,
+            stepName: dto.stepName,
+            sizeBytes: dto.sizeBytes,
+          },
+        });
+
+    // Push screenshot URL to originating kiosk device in real-time
+    try {
+      let deviceSerial = jobDeviceCache.get(jobId);
+      if (!deviceSerial) {
+        const job = await this.prisma.seleniumJob.findUnique({ where: { id: jobId }, select: { inputData: true } });
+        const inputData = (job?.inputData ?? {}) as Record<string, unknown>;
+        deviceSerial = inputData['deviceSerial'] as string | undefined;
+        if (deviceSerial) jobDeviceCache.set(jobId, deviceSerial);
+      }
+      if (deviceSerial && dto.storagePath) {
+        this.realtime.sendToDevice(deviceSerial, 'selenium:screenshot', {
+          jobId,
+          screenshotUrl: `/uploads/${dto.storagePath}`,
+          stepOrder: dto.stepOrder,
+          pageUrl: dto.pageUrl,
+        });
+      }
+    } catch { /* non-critical */ }
+
+    return shot ?? { jobId, storagePath: dto.storagePath, isLive: true };
   }
 
   async getJobLogs(jobId: string, limit = 500) {

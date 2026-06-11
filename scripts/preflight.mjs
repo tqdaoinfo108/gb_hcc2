@@ -3,7 +3,7 @@ import { io } from "socket.io-client";
 import { requireEnv } from "./env.mjs";
 
 const prisma = new PrismaClient();
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:4000";
+const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3001";
 
 const checks = [];
 

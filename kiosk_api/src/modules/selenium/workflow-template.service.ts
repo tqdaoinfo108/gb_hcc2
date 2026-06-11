@@ -10,7 +10,8 @@ export class WorkflowTemplateService {
     return this.prisma.workflowTemplate.findMany({
       where: { deletedAt: null, ...(includeInactive ? {} : { isActive: true }) },
       include: {
-        _count: { select: { steps: { where: { deletedAt: null } }, jobs: true } },
+        steps: { where: { deletedAt: null }, orderBy: { stepOrder: 'asc' } },
+        _count: { select: { jobs: true } },
       },
       orderBy: [{ isPublished: 'desc' }, { updatedAt: 'desc' }],
     });

@@ -19,7 +19,8 @@
     "build": "npm run bootstrap && npm run build -w @smart-kiosk/shared-types && npm run build -w @smart-kiosk/config && npm run build -w @smart-kiosk/ui && npm run build -w @smart-kiosk/api && npm run build -w @smart-kiosk/cms && npm run build -w @smart-kiosk/kiosk",
     "start": "npm run bootstrap && concurrently \"npm run start:prod -w @smart-kiosk/api\" \"npm run start -w @smart-kiosk/cms\"",
     "tauri:dev": "npm run bootstrap && npm run tauri:dev -w @smart-kiosk/kiosk",
-    "tauri:build": "npm run bootstrap && npm run tauri:build -w @smart-kiosk/kiosk"
+    "tauri:build": "npm run bootstrap && npm run tauri:build -w @smart-kiosk/kiosk",
+    "package:server": "powershell -ExecutionPolicy Bypass -File scripts/package-windows-server-release.ps1"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

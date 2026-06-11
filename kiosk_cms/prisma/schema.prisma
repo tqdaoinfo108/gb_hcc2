@@ -1320,3 +1320,313 @@ model KioskStatistic {
   @@index([date])
   @@map("kiosk_statistics")
 }
+model CopyDocCategory {
+  id             String    @id @default(uuid())
+  code           String    @unique
+  name           String
+  nameEn         String?
+  description    String?
+  icon           String?
+  colorHex       String?
+  sortOrder      Int       @default(0)
+  isActive       Boolean   @default(true)
+  // Pricing
+  pricePerCopy   Decimal   @db.Decimal(15, 2) @default(0)
+  processingFeeRate Decimal @db.Decimal(5, 4) @default(0.1) // 10% default
+  maxCopiesPerRequest Int  @default(10)
+  // Legal
+  legalBasis     String?
+  validityDays   Int       @default(0)  // 0 = no expiry
+  requiresStamp  Boolean   @default(true)
+  // OCR Auto-detection configuration
+  ocrKeywords      String[]   // OCR text keywords that map to this category
+  ocrDocTypes      String[]   // Document type codes (e.g. "CCCD", "BIRTH_CERT")
+  ocrMinScore      Int        @default(1)   // Min keyword matches to auto-select
+  pdfTemplateName  String?    // PDF layout variant name
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  requests CopyDocRequest[]
+  feeRules CopyDocFeeRule[]
+
+  @@map("copy_doc_categories")
+}
+
+/// Tiered/override fee rules for a category. Evaluated top-to-bottom.
+model CopyDocFeeRule {
+  id           String          @id @default(uuid())
+  categoryId   String
+  ruleName     String
+  minQuantity  Int             @default(1)
+  maxQuantity  Int?
+  pricePerCopy Decimal         @db.Decimal(15, 2)
+  feeType      CopyDocFeeType  @default(FIXED)
+  isActive     Boolean         @default(true)
+  effectiveFrom DateTime       @default(now())
+  effectiveTo  DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  category CopyDocCategory @relation(fields: [categoryId], references: [id])
+
+  @@index([categoryId])
+  @@map("copy_doc_fee_rules")
+}
+
+enum CopyDocFeeType {
+  FIXED          // flat price per copy
+  PROGRESSIVE    // price drops per tier
+  EXEMPT         // free (e.g. social policy)
+}
+
+/// The main copy request created when citizen starts the sao-y service.
+model CopyDocRequest {
+  id             String              @id @default(uuid())
+  categoryId     String?
+  sessionId      String
+  citizenId      String?
+  kioskDeviceId  String?
+  requestCode    String              @unique  // e.g. SY-2026-12345
+  status         CopyRequestStatus   @default(INITIATED)
+  quantity       Int                 @default(1)
+  baseFee        Decimal             @db.Decimal(15, 2) @default(0)
+  processingFee  Decimal             @db.Decimal(15, 2) @default(0)
+  totalFee       Decimal             @db.Decimal(15, 2) @default(0)
+  feeConfirmedAt DateTime?
+  paymentRef     String?
+  receiptCode    String?             @unique
+  digitalDocId   String?             // Link to saved DigitalDocument
+  rawImagePath           String?
+  processedImagePath     String?
+  pdfPath                String?
+  detectedCategoryId     String?
+  detectedTypeLabel      String?
+  detectedTypeConfidence Float?
+  ocrText                String?   @db.Text   // Full OCR text extracted client-side
+  ocrOrientation         Int?                 // Rotation applied to upright the doc (0/90/180/270)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  completedAt    DateTime?
+  deletedAt      DateTime?
+
+  category       CopyDocCategory?     @relation(fields: [categoryId], references: [id])
+  scanSessions   MobileScanSession[]
+  aiJobs         DocAIProcessingJob[]
+  printJobs      PrintJob[]
+  feeTransaction FeeTransaction?
+  pages          CopyDocPage[]
+
+  @@index([sessionId])
+  @@index([status])
+  @@map("copy_doc_requests")
+}
+
+/// One scanned page of a copy request. Multi-page documents create several
+/// rows; classification is driven by pageIndex = 0 (the first page).
+model CopyDocPage {
+  id                 String   @id @default(uuid())
+  requestId          String
+  pageIndex          Int      // 0-based display order
+  rawImagePath       String   // upright original (client orientation-fixed)
+  processedImagePath String?  // perspective-cropped result (the printable copy)
+  ocrText            String?  @db.Text
+  ocrOrientation     Int?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  request CopyDocRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, pageIndex])
+  @@index([requestId])
+  @@map("copy_doc_pages")
+}
+
+enum CopyRequestStatus {
+  INITIATED          // Request created, QR shown
+  SCAN_PENDING       // Waiting for mobile scan
+  SCAN_IN_PROGRESS   // Mobile connected, uploading
+  SCAN_COMPLETE      // Images received
+  AI_PROCESSING      // AI analysing images
+  PREVIEW_READY      // Corners detected, showing preview
+  ADJUSTED           // Citizen confirmed crop
+  FEE_PENDING        // Showing fee, waiting confirmation
+  FEE_CONFIRMED      // Citizen confirmed payment
+  GENERATING_PDF     // Creating electronic copy
+  PRINT_QUEUED       // Sent to printer queue
+  PRINTING           // Printing in progress
+  COMPLETED          // Printed and saved to wallet
+  FAILED             // Terminal failure
+  CANCELLED          // Citizen cancelled
+}
+
+/// Mobile QR scan session — tracks the temporary link used to connect
+/// the citizen's phone to the kiosk copy request.
+model MobileScanSession {
+  id            String              @id @default(uuid())
+  requestId     String
+  sessionToken  String              @unique @default(uuid())
+  qrPayload     String              // URL encoded in QR
+  status        ScanSessionStatus   @default(PENDING)
+  mobileUA      String?             // Mobile browser user-agent
+  mobileIp      String?
+  connectedAt   DateTime?
+  uploadedAt    DateTime?
+  expiresAt     DateTime
+  scanImages    Json?               // Array of {url, side, uploadedAt}
+  rawImagePaths String[]            // Storage paths before processing
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  request CopyDocRequest @relation(fields: [requestId], references: [id])
+
+  @@index([requestId])
+  @@map("mobile_scan_sessions")
+}
+
+enum ScanSessionStatus {
+  PENDING        // QR generated, not yet scanned
+  CONNECTED      // Mobile opened the link
+  UPLOADING      // Images being uploaded
+  COMPLETE       // All images received
+  EXPIRED        // Token expired
+  ERROR
+}
+
+/// AI Document processing job for image analysis, boundary detection, enhancement.
+/// Each request may spawn multiple jobs (1 per image or per AI task type).
+model DocAIProcessingJob {
+  id             String           @id @default(uuid())
+  requestId      String
+  aiJobId        String?          // Links to AIJob for routing/tracking
+  jobType        AIJobType        @default(DOCUMENT_ANALYZE)
+  inputImagePath String
+  status         JobStatus        @default(PENDING)
+  // Raw AI output
+  detectedType   String?          // e.g. "CCCD", "BIRTH_CERTIFICATE"
+  confidence     Float?
+  boundaryPoints Json?            // [{x,y}] 4 corners in pixel coords
+  enhancedPath   String?          // Storage path of enhanced image
+  ocrText        String?          // Extracted text (internal only)
+  metadata       Json?
+  errorMessage   String?
+  processedAt    DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  request CopyDocRequest @relation(fields: [requestId], references: [id])
+
+  @@index([requestId])
+  @@map("doc_ai_processing_jobs")
+}
+
+// ════════════════════════════════════════════════════
+// MODULE 17 — PRINT & FEE TRANSACTIONS
+// ════════════════════════════════════════════════════
+
+model PrintJob {
+  id              String        @id @default(uuid())
+  copyRequestId   String?
+  kioskDeviceId   String?
+  sessionId       String?
+  jobType         PrintJobType  @default(DOCUMENT_COPY)
+  status          PrintStatus   @default(QUEUED)
+  filePath        String?       // PDF path to print
+  copies          Int           @default(1)
+  printerName     String?
+  printerStatus   String?
+  sentAt          DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  failReason      String?
+  retryCount      Int           @default(0)
+  outputPageCount Int?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  copyRequest CopyDocRequest? @relation(fields: [copyRequestId], references: [id])
+
+  @@index([status])
+  @@index([kioskDeviceId])
+  @@map("print_jobs")
+}
+
+enum PrintJobType {
+  DOCUMENT_COPY
+  SUBMISSION_RECEIPT
+  QUEUE_TICKET
+  REPORT
+}
+
+enum PrintStatus {
+  QUEUED
+  READY_TO_PRINT
+  PRINTING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model FeeTransaction {
+  id              String              @id @default(uuid())
+  copyRequestId   String?             @unique
+  transactionRef  String              @unique @default(uuid())
+  citizenId       String?
+  amount          Decimal             @db.Decimal(15, 2)
+  currency        String              @default("VND")
+  paymentMethod   PaymentMethod       @default(CASH)
+  status          PaymentStatus       @default(PENDING)
+  confirmedAt     DateTime?
+  confirmedBy     String?             // Admin/operator who confirmed
+  receiptNumber   String?             @unique
+  metadata        Json?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  copyRequest CopyDocRequest? @relation(fields: [copyRequestId], references: [id])
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("fee_transactions")
+}
+
+enum PaymentMethod {
+  CASH
+  VNPAY
+  MOMO
+  BANKING
+  WAIVED    // Exempt / free
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  REFUNDED
+  WAIVED
+}
+
+
+enum JobStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+  RETRYING
+}
+
+enum AIJobType {
+  INTENT_DETECTION
+  PROCEDURE_MATCH
+  QA_RESPONSE
+  DOCUMENT_ANALYZE
+  DOCUMENT_BOUNDARY
+  OCR_EXTRACT
+  IMAGE_ENHANCE
+  TRANSLATION
+  SENTIMENT_ANALYSIS
+  SUMMARY
+}

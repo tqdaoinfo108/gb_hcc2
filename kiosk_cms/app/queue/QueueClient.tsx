@@ -3,8 +3,8 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { StatusBadge, Metric } from "../components";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-const WS_URL  = process.env.NEXT_PUBLIC_WS_URL  ?? "http://localhost:4000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+const WS_URL  = process.env.NEXT_PUBLIC_WS_URL  ?? "http://localhost:3001";
 
 /* ── Types ─────────────────────────────────────────────── */
 interface TicketRow {

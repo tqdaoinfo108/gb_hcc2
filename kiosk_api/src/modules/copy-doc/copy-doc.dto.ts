@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsBoolean, IsEnum, IsNumber, IsObject, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsBoolean, IsEnum, IsNumber, IsObject, IsArray, Min, Max } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { PaymentMethod, CopyRequestStatus } from '@prisma/client';
 
@@ -37,7 +37,8 @@ export class CreateFeeRuleDto {
 // ─── Copy Doc Request ─────────────────────────────────────────────────────────
 
 export class InitiateCopyDocDto {
-  @ApiProperty() @IsString() categoryId!: string;
+  /** Optional — if omitted the category is determined later by AI/OCR */
+  @ApiPropertyOptional() @IsOptional() @IsString() categoryId?: string;
   @ApiProperty() @IsString() sessionId!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() citizenId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() kioskDeviceId?: string;
@@ -87,4 +88,32 @@ export class UpdatePrintJobDto {
   @ApiPropertyOptional() @IsOptional() @IsString() printerStatus?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() failReason?: string;
   @ApiPropertyOptional() @IsOptional() @IsInt() outputPageCount?: number;
+}
+
+// File upload response
+export class UploadImageResponseDto {
+  @ApiProperty() storagePath!: string;
+  @ApiProperty() url!: string;
+  @ApiProperty() requestId!: string;
+}
+
+// Initiate request (no categoryId required anymore)
+export class InitiateRequestDto {
+  @ApiProperty() @IsString() sessionId!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() kioskDeviceId?: string;
+}
+
+// Apply AI result after OCR
+export class ApplyAiResultDto {
+  @ApiProperty() @IsString() categoryId!: string;
+  @ApiProperty() @IsString() detectedTypeLabel!: string;
+  @ApiProperty() @IsNumber() detectedTypeConfidence!: number;
+  @ApiPropertyOptional() @IsOptional() @IsArray() corners?: { x: number; y: number }[];
+}
+
+// Generate PDF
+export class GeneratePdfResponseDto {
+  @ApiProperty() pdfPath!: string;
+  @ApiProperty() pdfUrl!: string;
+  @ApiProperty() requestId!: string;
 }

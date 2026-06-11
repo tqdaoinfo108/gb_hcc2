@@ -11,7 +11,12 @@ export class ProceduresService {
         deletedAt: null,
         isActive: true,
         ...(categoryId ? { categoryId } : {}),
-        ...(search ? { name: { contains: search, mode: 'insensitive' } } : {}),
+        ...(search ? {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' as const } },
+            { code: { equals: search.toUpperCase() } },
+          ],
+        } : {}),
       },
       include: { category: true },
       orderBy: { name: 'asc' },

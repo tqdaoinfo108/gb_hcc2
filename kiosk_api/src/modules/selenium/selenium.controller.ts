@@ -10,7 +10,7 @@ import {
   CreateWorkflowStepDto, UpdateWorkflowStepDto,
   RegisterRunnerDto, RunnerHeartbeatDto,
   DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddScreenshotDto,
-  CitizenInputDto, RequestInputDto,
+  CitizenInputDto, RequestInputDto, InteractEventDto, ReportFocusDto,
 } from './selenium.dto';
 
 // ─── Workflow Templates ───────────────────────────────────────────────────────
@@ -195,5 +195,27 @@ export class SeleniumJobController {
   @ApiOperation({ summary: 'Runner: poll for pending citizen input (short-poll)' })
   pollInput(@Param('id') id: string) {
     return this.jobs.pollCitizenInput(id);
+  }
+
+  // ─── Interactive remote control ───────────────────────────────────────────
+
+  @Post(':id/interact')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Kiosk: send a tap/key/scroll/finish event to the live browser' })
+  interact(@Param('id') id: string, @Body() body: InteractEventDto) {
+    return this.jobs.enqueueInteraction(id, body);
+  }
+
+  @Get(':id/interactions')
+  @ApiOperation({ summary: 'Runner: drain queued interaction events (short-poll)' })
+  interactions(@Param('id') id: string) {
+    return this.jobs.drainInteractions(id);
+  }
+
+  @Post(':id/report-focus')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Runner: report whether a text input is focused (auto keyboard)' })
+  reportFocus(@Param('id') id: string, @Body() body: ReportFocusDto) {
+    return this.jobs.reportInputFocus(id, body.focused);
   }
 }

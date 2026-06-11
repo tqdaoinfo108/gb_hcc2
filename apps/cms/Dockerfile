@@ -21,5 +21,5 @@ COPY --from=builder /app/apps/cms/.next ./apps/cms/.next
 COPY --from=builder /app/apps/cms/package.json ./apps/cms/package.json
 COPY --from=builder /app/apps/cms/public ./apps/cms/public
 COPY --from=builder /app/package.json ./package.json
-EXPOSE 3001
+EXPOSE 3002
 CMD ["npm", "run", "start", "-w", "@smart-kiosk/cms"]

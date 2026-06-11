@@ -32,7 +32,7 @@ const aiChips = [
 ];
 
 async function fetchDevice(deviceId: string): Promise<KioskDeviceState | null> {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:4000";
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3001";
   try {
     const response = await fetch(`${apiUrl}/devices/${encodeURIComponent(deviceId)}`);
     if (!response.ok) {

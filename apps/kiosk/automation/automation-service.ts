@@ -1,7 +1,7 @@
 import { chromium, type Page } from "playwright";
 import type { SelectorRecord, WorkflowDefinition, WorkflowStepDefinition } from "@smart-kiosk/shared-types";
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:4000";
+const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3001";
 
 async function fetchActiveWorkflow(slug: string): Promise<WorkflowDefinition> {
   const response = await fetch(`${apiUrl}/workflows/${encodeURIComponent(slug)}/active`);
@@ -122,7 +122,12 @@ async function reportFailure(sessionId: string, step: WorkflowStepDefinition, pa
 
 export async function runWorkflow(slug: string, sessionId: string) {
   const workflow = await fetchActiveWorkflow(slug);
-  const browser = await chromium.launch({ headless: false });
+  const browserMode = (process.env.BROWSER_MODE || (process.env.HEADLESS === "false" ? "hidden" : "headless")).toLowerCase();
+  const headless = browserMode === "headless";
+  const browser = await chromium.launch({
+    headless,
+    args: !headless && browserMode !== "visible" ? ["--window-position=-32000,-32000", "--window-size=1366,900"] : [],
+  });
   const context = await browser.newContext({
     recordVideo: { dir: "automation-videos" }
   });

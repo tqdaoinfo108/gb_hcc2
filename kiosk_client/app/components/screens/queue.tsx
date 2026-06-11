@@ -4,7 +4,7 @@ import { TopBar, PageHeader } from "../ui";
 import { Icon } from "../icons";
 import { queueApi, QueueServiceData, QueueTicketData, ServiceStats } from "../../lib/api";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "http://localhost:4000";
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "http://localhost:3001";
 
 /* Map backend service codes → visual style */
 const SERVICE_STYLES: Record<string, { icon: string; color: string; bg: string }> = {

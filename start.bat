@@ -38,6 +38,10 @@ if not exist "kiosk_client\node_modules" (
   echo Installing kiosk_client dependencies...
   cd kiosk_client && npm install && cd ..
 )
+if not exist "kiosk_runner\node_modules" (
+  echo Installing kiosk_runner dependencies...
+  cd kiosk_runner && npm install && npx playwright install chromium && cd ..
+)
 
 :: Clear stale Next.js build caches to prevent chunk mismatch errors
 if exist "kiosk_cms\.next"    rmdir /s /q "kiosk_cms\.next"
@@ -48,10 +52,12 @@ echo Starting all services...
 start "kiosk_api"    cmd /k "cd /d "%~dp0kiosk_api"    && npm run dev"
 start "kiosk_cms"    cmd /k "cd /d "%~dp0kiosk_cms"    && npm run dev"
 start "kiosk_client" cmd /k "cd /d "%~dp0kiosk_client" && npm run dev"
+start "kiosk_runner" cmd /k "cd /d "%~dp0kiosk_runner" && set API_BASE=http://localhost:3001&& set RUNNER_ID=runner-01&& set BROWSER_MODE=hidden&& npm start"
 
 echo.
-echo   kiosk_api    -^> http://localhost:4000
-echo   kiosk_cms    -^> http://localhost:3001
+echo   kiosk_api    -^> http://localhost:3001
+echo   kiosk_cms    -^> http://localhost:3002
 echo   kiosk_client -^> http://localhost:3000
+echo   kiosk_runner -^> Selenium/Playwright agent (runner-01)
 echo.
 pause >nul

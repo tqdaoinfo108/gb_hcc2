@@ -56,7 +56,7 @@ export function DeviceHeartbeat({
   const [socketState, setSocketState] = useState("connecting");
 
   useEffect(() => {
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "http://127.0.0.1:4000";
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "http://127.0.0.1:3001";
     const socket = io(`${wsUrl}/device`, {
       autoConnect: false,
       transports: ["websocket"]

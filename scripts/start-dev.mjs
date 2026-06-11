@@ -31,13 +31,13 @@ if (!existsSync(resolve(root, "node_modules"))) {
 
 run("npm run bootstrap", "Checking database and applying migrations");
 
-await warnIfPortsInUse([4000, 3001, 3002]);
+await warnIfPortsInUse([3000, 3001, 3002]);
 
 console.log("");
 console.log("Starting dev services:");
-console.log("  API:    http://127.0.0.1:4000");
-console.log("  CMS:    http://127.0.0.1:3001");
-console.log("  Kiosk:  http://127.0.0.1:3002");
+console.log("  API:    http://127.0.0.1:3001");
+console.log("  CMS:    http://127.0.0.1:3002");
+console.log("  Kiosk:  http://127.0.0.1:3000");
 console.log("");
 console.log("Press Ctrl+C to stop all services.");
 console.log("");

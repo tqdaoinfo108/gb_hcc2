@@ -3,6 +3,7 @@ node_modules/
 dist/
 coverage/
 .turbo/
+deploy/
 .env
 .env.local
 target/

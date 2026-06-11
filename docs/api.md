@@ -3,7 +3,7 @@
 Swagger is exposed at:
 
 ```text
-http://127.0.0.1:4000/docs
+http://127.0.0.1:3001/docs
 ```
 
 ## Auth API

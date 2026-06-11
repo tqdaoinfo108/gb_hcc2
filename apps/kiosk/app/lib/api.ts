@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 config({ path: resolve(process.cwd(), "../../.env") });
 config({ path: resolve(process.cwd(), ".env.local"), override: true });
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:4000";
+const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3001";
 
 export type KioskDeviceState = {
   deviceId: string;

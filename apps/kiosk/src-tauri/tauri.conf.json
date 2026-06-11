@@ -5,7 +5,7 @@
   "identifier": "vn.gov.smart-kiosk",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://127.0.0.1:3002",
+    "devUrl": "http://127.0.0.1:3000",
     "beforeBuildCommand": "set TAURI_BUILD=true&& npm run build",
     "frontendDist": "../out"
   },

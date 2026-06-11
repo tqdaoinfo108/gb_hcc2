@@ -1,13 +1,17 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { ScanSessionStatus, CopyRequestStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { MobileUploadDto } from './copy-doc.dto';
 
 const QR_EXPIRY_MINUTES = 10;
 
 @Injectable()
 export class MobileScanService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private realtime: RealtimeService,
+  ) {}
 
   async createScanSession(requestId: string, baseUrl: string) {
     // Invalidate any existing pending sessions
@@ -68,6 +72,15 @@ export class MobileScanService {
       data: { status: CopyRequestStatus.SCAN_IN_PROGRESS },
     });
 
+    // Emit to kiosk device — phone has opened the page
+    const deviceSocketId = await this.getDeviceSocketId(session.requestId);
+    if (deviceSocketId) {
+      this.realtime.sendToDevice(deviceSocketId, 'copydoc:scan_connected', {
+        token,
+        sessionId: updated.id,
+      });
+    }
+
     return updated;
   }
 
@@ -116,7 +129,35 @@ export class MobileScanService {
       data: { status: CopyRequestStatus.AI_PROCESSING },
     });
 
+    // Emit to kiosk device — images received, processing started
+    const deviceSocketId = await this.getDeviceSocketId(session.requestId);
+    if (deviceSocketId) {
+      this.realtime.sendToDevice(deviceSocketId, 'copydoc:scan_uploaded', {
+        requestId: session.requestId,
+        imageCount: dto.imagePaths.length,
+      });
+    }
+
     return updated;
+  }
+
+  /** Emit the AI detection result to the kiosk device */
+  async emitAiResult(
+    requestId: string,
+    data: {
+      corners: { x: number; y: number }[];
+      categoryId: string | null;
+      label: string;
+      confidence: number;
+      price: number;
+      imageUrl?: string;
+      pages?: { pageIndex: number; url: string }[];
+    },
+  ) {
+    const deviceSocketId = await this.getDeviceSocketId(requestId);
+    if (deviceSocketId) {
+      this.realtime.sendToDevice(deviceSocketId, 'copydoc:ai_result', data);
+    }
   }
 
   async findByToken(token: string) {
@@ -132,5 +173,19 @@ export class MobileScanService {
       where: { requestId },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /** Resolve the Socket.IO key for a copy-doc request's kiosk device */
+  private async getDeviceSocketId(requestId: string): Promise<string | null> {
+    const request = await this.prisma.copyDocRequest.findUnique({
+      where: { id: requestId },
+    });
+    if (!request?.kioskDeviceId) return null;
+
+    const device = await this.prisma.kioskDevice.findUnique({
+      where: { id: request.kioskDeviceId },
+      select: { deviceId: true },
+    });
+    return device?.deviceId ?? null;
   }
 }

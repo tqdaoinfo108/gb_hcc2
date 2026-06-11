@@ -29,7 +29,7 @@ export const appConfig = {
   databaseUrl: () => requiredEnv("DATABASE_URL"),
   redisUrl: () => process.env.REDIS_URL ?? "redis://localhost:6379",
   jwtSecret: () => requiredEnv("JWT_SECRET"),
-  apiPort: () => Number(process.env.API_PORT ?? 4000),
-  apiUrl: () => process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:4000",
-  wsUrl: () => process.env.NEXT_PUBLIC_WS_URL ?? "http://127.0.0.1:4000"
+  apiPort: () => Number(process.env.API_PORT ?? 3001),
+  apiUrl: () => process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3001",
+  wsUrl: () => process.env.NEXT_PUBLIC_WS_URL ?? "http://127.0.0.1:3001"
 };

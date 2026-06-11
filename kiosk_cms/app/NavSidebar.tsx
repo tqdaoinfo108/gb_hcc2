@@ -51,6 +51,15 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    label: "Sao y tài liệu",
+    icon: "📋",
+    items: [
+      { label: "Tổng quan",       href: "/copy-doc",              icon: "📊" },
+      { label: "Loại giấy tờ",    href: "/copy-doc/categories",   icon: "🗂️" },
+      { label: "Yêu cầu sao y",   href: "/copy-doc/requests",     icon: "📄" },
+    ],
+  },
+  {
     label: "AI & Nội dung",
     icon: "🤖",
     items: [

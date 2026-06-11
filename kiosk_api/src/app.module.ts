@@ -24,6 +24,8 @@ import { HomeServicesModule } from './modules/home-services/home-services.module
 // Enterprise platform modules
 import { SeleniumModule } from './modules/selenium/selenium.module';
 import { AIWorkerModule } from './modules/ai-worker/ai-worker.module';
+import { AiGatewayModule } from './modules/ai-gateway/ai-gateway.module';
+import { WorkflowModule } from './modules/workflow/workflow.module';
 import { CopyDocModule } from './modules/copy-doc/copy-doc.module';
 
 @Module({
@@ -49,6 +51,8 @@ import { CopyDocModule } from './modules/copy-doc/copy-doc.module';
     HomeServicesModule,
     SeleniumModule,
     AIWorkerModule,
+    WorkflowModule,
+    AiGatewayModule,
     CopyDocModule,
   ],
   controllers: [HealthController, AuthController],

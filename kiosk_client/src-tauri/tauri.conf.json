@@ -5,7 +5,7 @@
   "identifier": "vn.gov.smart-kiosk",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://127.0.0.1:3002",
+    "devUrl": "http://127.0.0.1:3000",
     "beforeBuildCommand": "set TAURI_BUILD=true&& npm run build",
     "frontendDist": "../out"
   },
@@ -16,7 +16,15 @@
         "width": 1280,
         "height": 800,
         "fullscreen": true,
-        "resizable": false
+        "maximized": true,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "focus": true
       }
     ],
     "security": {
@@ -37,13 +45,6 @@
       "wix": {
         "language": "en-US"
       }
-    }
-  },
-  "plugins": {
-    "updater": {
-      "active": true,
-      "endpoints": ["https://updates.example.internal/smart-kiosk/{{target}}/{{current_version}}"],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE1RTZDM0FFRDEyMDcxNkEKUldScWNTRFJyc1BtcFlRUEkvQUdUdHZVYTdrRGpER2VRc1h2a2VEczM4Tis4ZmwvSFJ1bjhMSTEK"
     }
   }
 }

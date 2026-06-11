@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { TopBar } from "../ui";
 import { Icon } from "../icons";
-import { seleniumApi } from "../../lib/api";
+import { seleniumApi, workflowApi } from "../../lib/api";
+import { VirtualKeyboard } from "../VirtualKeyboard";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,7 +15,9 @@ interface Props {
   onComplete: (result: SubmitResult) => void;
   sessionId?: string;
   deviceSerial?: string;
-  templateId?: string;
+  /** DB UUID of the procedure to submit — when provided, calls real workflow pipeline */
+  procedureId?: string;
+  citizenId?: string;
   procedureName?: string;
   jobId?: string;
   citizenData?: Record<string, string>;
@@ -36,6 +39,21 @@ interface DemoStep {
   portalAction: string;
   durationMs: number;
   interaction?: InteractionType;
+}
+
+interface FramePoint {
+  x: number;
+  y: number;
+}
+
+interface FrameGesture {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  moved: boolean;
+  lastSentAt: number;
+  pendingPoint: FramePoint | null;
+  flushTimer: number | null;
 }
 
 const DEMO_STEPS: DemoStep[] = [
@@ -64,6 +82,12 @@ function genCode() {
   const seq = Math.floor(10000 + Math.random() * 89999);
   return `BN-${year}-${seq}`;
 }
+
+const ctrlBtn: React.CSSProperties = {
+  width: 40, height: 36, borderRadius: 9, border: "1.5px solid var(--ink-7)",
+  background: "#fff", color: "var(--ink-2)", fontSize: 15, fontWeight: 700,
+  cursor: "pointer", flexShrink: 0,
+};
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -351,114 +375,12 @@ function SuccessOverlay({ code, onDone }: { code: string; onDone: () => void }) 
   );
 }
 
-// ─── Simulated government portal ──────────────────────────────────────────────
-
-function SimPortal({ stepId, action }: { stepId: string; action: string }) {
-  const isFill = stepId === "fill";
-  const isUpload = stepId === "upload";
-
-  return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", background: "#fff", fontSize: 11 }}>
-      {/* Gov header */}
-      <div style={{ height: 40, background: "#1a4f7a", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, flexShrink: 0 }}>
-        <div style={{ width: 26, height: 26, borderRadius: 4, background: "rgba(255,255,255,.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ width: 14, height: 14, borderRadius: 2, border: "2px solid rgba(255,255,255,.7)" }} />
-        </div>
-        <div>
-          <div style={{ fontSize: 9, color: "#fff", fontWeight: 700, letterSpacing: .5 }}>CỔNG DỊCH VỤ CÔNG QUỐC GIA</div>
-          <div style={{ fontSize: 8, color: "rgba(255,255,255,.6)" }}>dichvucong.gov.vn</div>
-        </div>
-      </div>
-
-      {/* Nav */}
-      <div style={{ height: 30, background: "#f0f2f5", borderBottom: "1px solid #dde", display: "flex", alignItems: "center", padding: "0 16px", gap: 20, flexShrink: 0 }}>
-        {["Trang chủ","Thủ tục","Hồ sơ của tôi","Tra cứu"].map(t => (
-          <span key={t} style={{ fontSize: 10, color: t === "Hồ sơ của tôi" ? "#0068b7" : "#555", fontWeight: t === "Hồ sơ của tôi" ? 700 : 400, borderBottom: t === "Hồ sơ của tôi" ? "2px solid #0068b7" : "none", paddingBottom: 2 }}>{t}</span>
-        ))}
-      </div>
-
-      {/* Content */}
-      <div style={{ flex: 1, padding: "14px 20px", overflowY: "hidden", display: "flex", gap: 16 }}>
-        {/* Form area */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 800, color: "#1a4f7a", borderBottom: "2px solid #0068b7", paddingBottom: 6 }}>
-            Cấp lại thẻ căn cước công dân
-          </div>
-
-          {isFill ? (
-            // Animated form filling
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {[
-                ["Họ và tên", "Nguyễn Thị Lan Anh", true],
-                ["Ngày sinh", "12/08/1988", true],
-                ["Giới tính", "Nữ", true],
-                ["Số CCCD", "079088012345", true],
-                ["Địa chỉ thường trú", "Số 47, Ngõ 62...", false],
-                ["Email", "lan.anh@gmail.com", false],
-              ].map(([label, val, filled], i) => (
-                <div key={label as string} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                  <label style={{ fontSize: 9, color: "#666", fontWeight: 600 }}>{label}</label>
-                  <div style={{
-                    height: 24, borderRadius: 4, border: `1px solid ${filled ? "#0068b7" : "#ccc"}`,
-                    padding: "0 8px", display: "flex", alignItems: "center", fontSize: 10,
-                    background: filled ? "#e8f2fb" : "#fff", color: filled ? "#003d73" : "#333",
-                    animation: filled ? `fadeIn ${0.3 + i * 0.15}s ease both` : "none",
-                  }}>
-                    {filled ? val : ""}
-                    {filled && <span style={{ marginLeft: 2, display: "inline-block", width: 1, height: 12, background: "#0068b7", animation: "blink 1s step-end infinite" }} />}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : isUpload ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {["CCCD bản sao (công chứng)", "Ảnh thẻ 3×4", "Giấy khai sinh"].map((name, i) => (
-                <div key={name} style={{
-                  display: "flex", alignItems: "center", gap: 10, padding: "8px 12px",
-                  borderRadius: 6, background: i < 2 ? "#dcfce7" : "#f1f5f9",
-                  border: `1px solid ${i < 2 ? "#16a34a" : "#cbd5e1"}`,
-                  animation: `fadeIn ${0.2 + i * 0.3}s ease both`,
-                }}>
-                  <div style={{ width: 16, height: 16, borderRadius: 3, background: i < 2 ? "#16a34a" : "#94a3b8", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {i < 2 && <span style={{ color: "#fff", fontSize: 9 }}>✓</span>}
-                  </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: i < 2 ? "#15803d" : "#64748b" }}>{name}</span>
-                  {i < 2 && <span style={{ marginLeft: "auto", fontSize: 9, color: "#16a34a" }}>Đã tải lên</span>}
-                  {i === 2 && <Spinner size={10} color="#64748b" />}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 120, flexDirection: "column", gap: 8 }}>
-              <Spinner size={22} color="#0068b7" />
-              <span style={{ fontSize: 10, color: "#666" }}>{action}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Right sidebar: steps */}
-        <div style={{ width: 130, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: "#888", marginBottom: 4 }}>TIẾN TRÌNH</div>
-          {["Chọn thủ tục", "Điền thông tin", "Đính kèm", "Xác nhận", "Nộp hồ sơ"].map((s, i) => (
-            <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ width: 14, height: 14, borderRadius: "50%", background: i < 2 ? "#0068b7" : i === 2 ? "#f59e0b" : "#e2e8f0", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {i < 2 && <span style={{ color: "#fff", fontSize: 7 }}>✓</span>}
-                {i === 2 && <Spinner size={8} color="#fff" />}
-              </div>
-              <span style={{ fontSize: 9, color: i < 2 ? "#0068b7" : i === 2 ? "#b45309" : "#94a3b8", fontWeight: i <= 2 ? 600 : 400 }}>{s}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export function ProcedureSubmitScreen({
   lang, onLangChange, onHome, onHelp, onComplete,
-  sessionId, deviceSerial, templateId, procedureName = "Cấp lại thẻ căn cước công dân",
+  sessionId, deviceSerial, procedureId, citizenId,
+  procedureName = "Cấp lại thẻ căn cước công dân",
   jobId: externalJobId,
   citizenData = DEFAULT_CITIZEN,
 }: Props) {
@@ -468,13 +390,38 @@ export function ProcedureSubmitScreen({
   const [progressPct, setProgressPct]   = useState(0);
   const [elapsedSec, setElapsedSec]     = useState(0);
   const [currentJobId, setCurrentJobId] = useState<string | null>(externalJobId ?? null);
-  const [appCode]                       = useState(() => genCode());
+  /** mode: "loading" = waiting for launch response | "real" = runner active | "demo" = fallback */
+  const [mode, setMode]                 = useState<"loading" | "real" | "demo">("loading");
+  const [appCode, setAppCode]           = useState(() => genCode());
   const [done, setDone]                 = useState(false);
   const [failed, setFailed]             = useState<string | null>(null);
-  const [screenshot, setScreenshot]     = useState<string | undefined>();
+  const [hasScreenshot, setHasScreenshot] = useState(false);
+  const [currentUrl, setCurrentUrl]     = useState<string>("https://dichvucong.gov.vn/");
+  const [showKeyboard, setShowKeyboard] = useState(false);
+  const [liveMsg, setLiveMsg]           = useState<string | null>(null);
+  const activeStepRef                   = useRef(0);
+  const imgRef                          = useRef<HTMLImageElement | null>(null);
+  const hasScreenshotRef                = useRef(false);
+  const frameSequenceRef                = useRef(0);
+  const gestureRef                      = useRef<FrameGesture | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const pushFrame = useCallback((url: string) => {
+    const sequence = ++frameSequenceRef.current;
+    const loader = new Image();
+    loader.decoding = "async";
+    loader.onload = () => {
+      if (sequence !== frameSequenceRef.current || !imgRef.current) return;
+      imgRef.current.src = url;
+      if (!hasScreenshotRef.current) {
+        hasScreenshotRef.current = true;
+        setHasScreenshot(true);
+      }
+    };
+    loader.src = url;
+  }, []);
 
   // Elapsed time counter
   useEffect(() => {
@@ -505,20 +452,33 @@ export function ProcedureSubmitScreen({
     timerRef.current = setTimeout(() => advanceStep(idx + 1), step.durationMs);
   }, []);
 
-  // Start simulation on mount
-  useEffect(() => {
-    // Optionally dispatch a real Selenium job if templateId given
-    if (templateId && !externalJobId) {
-      seleniumApi.dispatch({
-        templateId,
-        kioskSessionId: sessionId,
-        deviceSerial,
-        inputData: citizenData as Record<string, unknown>,
-      }).then(job => setCurrentJobId(job.id)).catch(() => {/* demo mode */});
-    }
+  // Keep activeStepRef in sync so WS handler can read latest value
+  useEffect(() => { activeStepRef.current = activeStep; }, [activeStep]);
 
-    // Always run simulation so screen is responsive even without a real runner
-    timerRef.current = setTimeout(() => advanceStep(0), 600);
+  // Start real workflow or fall back to demo on mount
+  useEffect(() => {
+    if (procedureId && sessionId) {
+      // ── Real mode: call the convergence entry point ──────────────────
+      workflowApi.launch({
+        procedureId,
+        kioskSessionId: sessionId,
+        citizenId,
+        deviceSerial,
+        source: "MANUAL",
+      }).then(r => {
+        setCurrentJobId(r.jobId);
+        setMode("real");
+        // Step list shows "Đang khởi tạo…" — runner will push progress via WS
+      }).catch(() => {
+        // Procedure has no configured template → fall back to demo
+        setMode("demo");
+        timerRef.current = setTimeout(() => advanceStep(0), 600);
+      });
+    } else {
+      // No procedureId provided → demo mode
+      setMode("demo");
+      timerRef.current = setTimeout(() => advanceStep(0), 600);
+    }
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -529,7 +489,7 @@ export function ProcedureSubmitScreen({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let socket: any = null;
     let disposed = false;
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
     import("socket.io-client").then(({ io }) => {
       if (disposed) return;
@@ -544,13 +504,33 @@ export function ProcedureSubmitScreen({
         progressPercent: number;
         currentStepOrder: number;
         citizenMessage?: string;
+        outputData?: Record<string, unknown>;
+        failReason?: string;
       }) => {
         if (data.jobId !== currentJobId) return;
+
         setProgressPct(data.progressPercent ?? 0);
+        if (data.citizenMessage) setLiveMsg(data.citizenMessage);
         if (data.currentStepOrder !== undefined) {
           const idx = Math.min(data.currentStepOrder, DEMO_STEPS.length - 1);
           setStepStatus(prev => prev.map((_, i) => i < idx ? "done" : i === idx ? "active" : "pending"));
           setActiveStep(idx);
+        }
+
+        // ── Terminal states from real runner ──────────────────────────
+        if (data.status === "COMPLETED") {
+          if (timerRef.current) clearTimeout(timerRef.current);
+          const realCode = data.outputData?.["applicationCode"];
+          if (realCode) setAppCode(String(realCode));
+          // Mark all steps done with a slight animation delay
+          setStepStatus(DEMO_STEPS.map(() => "done"));
+          setProgressPct(100);
+          setTimeout(() => setDone(true), 600);
+        } else if (data.status === "FAILED") {
+          if (timerRef.current) clearTimeout(timerRef.current);
+          const cur = activeStepRef.current;
+          setStepStatus(prev => prev.map((_, i) => i < cur ? "done" : i === cur ? "error" : "pending"));
+          setFailed(data.failReason ?? "Rất tiếc, quy trình nộp hồ sơ chưa hoàn tất. Vui lòng thử lại hoặc nhờ nhân viên hỗ trợ.");
         }
       });
 
@@ -559,22 +539,41 @@ export function ProcedureSubmitScreen({
         setInteraction(data.inputType as InteractionType);
         if (timerRef.current) clearTimeout(timerRef.current);
       });
+
+      // Real runner screenshot — live browser view of dichvucong.gov.vn
+      socket.on("selenium:screenshot", (data: { jobId: string; screenshotUrl: string; pageUrl?: string }) => {
+        if (data.jobId !== currentJobId) return;
+        const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+        pushFrame(`${apiBase}${data.screenshotUrl}?t=${Date.now()}`);
+        if (data.pageUrl) {
+          setCurrentUrl(current => current === data.pageUrl ? current : data.pageUrl!);
+        }
+      });
+
+      // Runner reports a text input is focused → auto-show the virtual keyboard
+      socket.on("selenium:input_focus", (data: { jobId: string; focused: boolean }) => {
+        if (data.jobId !== currentJobId) return;
+        if (data.focused) setShowKeyboard(true);
+      });
     });
 
     return () => { disposed = true; socket?.disconnect(); };
-  }, [currentJobId, deviceSerial]);
+  }, [currentJobId, deviceSerial, pushFrame]);
 
   // ── Citizen interaction handlers ───────────────────────────────────────────
   function handleInteractionDone(value?: string) {
     setInteraction(null);
     if (currentJobId) {
+      // Submit citizen input to runner (real mode) or ignore (demo)
       seleniumApi.submitCitizenInput(currentJobId, {
         inputType: interaction ?? "CONFIRM",
         value,
       }).catch(() => {});
     }
-    // Continue demo simulation
-    timerRef.current = setTimeout(() => advanceStep(activeStep + 1), 400);
+    // In demo mode, advance the simulation; in real mode the runner drives progress
+    if (mode === "demo") {
+      timerRef.current = setTimeout(() => advanceStep(activeStep + 1), 400);
+    }
   }
 
   function handleCancel() {
@@ -583,8 +582,120 @@ export function ProcedureSubmitScreen({
     onHome();
   }
 
+  // ── Interactive remote control ─────────────────────────────────────────────
+  function mapFramePoint(clientX: number, clientY: number): FramePoint | null {
+    const img = imgRef.current;
+    if (!img) return null;
+    const rect = img.getBoundingClientRect();
+    const natW = img.naturalWidth || 1366, natH = img.naturalHeight || 900;
+    const scale = Math.min(rect.width / natW, rect.height / natH);
+    if (!scale) return null;
+    const offsetX = (rect.width - natW * scale) / 2;
+    const offsetY = (rect.height - natH * scale) / 2;
+    const x = (clientX - rect.left - offsetX) / scale;
+    const y = (clientY - rect.top - offsetY) / scale;
+    if (x < 0 || y < 0 || x > natW || y > natH) return null;
+    return { x: Math.round(x), y: Math.round(y) };
+  }
+
+  function flushTouchMove() {
+    const gesture = gestureRef.current;
+    if (!gesture || !gesture.pendingPoint || !currentJobId) return;
+    const point = gesture.pendingPoint;
+    gesture.pendingPoint = null;
+    gesture.flushTimer = null;
+    gesture.lastSentAt = performance.now();
+    seleniumApi.interact(currentJobId, { type: "touchMove", ...point }).catch(() => {});
+  }
+
+  function queueTouchMove(point: FramePoint) {
+    const gesture = gestureRef.current;
+    if (!gesture) return;
+    gesture.pendingPoint = point;
+    const wait = Math.max(0, 45 - (performance.now() - gesture.lastSentAt));
+    if (wait === 0) {
+      flushTouchMove();
+    } else if (gesture.flushTimer === null) {
+      gesture.flushTimer = window.setTimeout(flushTouchMove, wait);
+    }
+  }
+
+  function handleFramePointerDown(e: React.PointerEvent<HTMLImageElement>) {
+    if (mode !== "real" || !currentJobId) return;
+    const point = mapFramePoint(e.clientX, e.clientY);
+    if (!point) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    gestureRef.current = {
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      moved: false,
+      lastSentAt: performance.now(),
+      pendingPoint: null,
+      flushTimer: null,
+    };
+    seleniumApi.interact(currentJobId, { type: "touchStart", ...point }).catch(() => {});
+  }
+
+  function handleFramePointerMove(e: React.PointerEvent<HTMLImageElement>) {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== e.pointerId) return;
+    const point = mapFramePoint(e.clientX, e.clientY);
+    if (!point) return;
+    e.preventDefault();
+    if (Math.hypot(e.clientX - gesture.startClientX, e.clientY - gesture.startClientY) > 6) {
+      gesture.moved = true;
+    }
+    queueTouchMove(point);
+  }
+
+  function finishFrameGesture(e: React.PointerEvent<HTMLImageElement>) {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== e.pointerId || !currentJobId) return;
+    e.preventDefault();
+    if (gesture.flushTimer !== null) window.clearTimeout(gesture.flushTimer);
+    const point = mapFramePoint(e.clientX, e.clientY) ?? gesture.pendingPoint;
+    if (point && gesture.moved) {
+      seleniumApi.interact(currentJobId, { type: "touchMove", ...point }).catch(() => {});
+    }
+    seleniumApi.interact(currentJobId, {
+      type: "touchEnd",
+      ...(point ?? {}),
+    }).catch(() => {});
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    gestureRef.current = null;
+  }
+
+  function handleFramePointerCancel(e: React.PointerEvent<HTMLImageElement>) {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== e.pointerId || !currentJobId) return;
+    if (gesture.flushTimer !== null) window.clearTimeout(gesture.flushTimer);
+    seleniumApi.interact(currentJobId, { type: "touchEnd" }).catch(() => {});
+    gestureRef.current = null;
+  }
+
+  const sendChar = (text: string) => { if (currentJobId) seleniumApi.interact(currentJobId, { type: "type", text }).catch(() => {}); };
+  const sendKey  = (key: "Backspace" | "Enter" | "Tab") => { if (currentJobId) seleniumApi.interact(currentJobId, { type: "key", key }).catch(() => {}); };
+  const sendScroll = (deltaY: number, deltaX = 0) => {
+    if (currentJobId) seleniumApi.interact(currentJobId, { type: "scroll", deltaX, deltaY }).catch(() => {});
+  };
+
+  function handleFinish() {
+    if (!currentJobId) return;
+    seleniumApi.interact(currentJobId, { type: "finish" }).catch(() => {});
+    setShowKeyboard(false);
+  }
+
   const currentStep = DEMO_STEPS[activeStep];
   const elapsed = `${Math.floor(elapsedSec / 60)}:${String(elapsedSec % 60).padStart(2, "0")}`;
+  const statusMsg = mode === "loading"
+    ? "Đang kết nối với hệ thống dịch vụ công…"
+    : mode === "real"
+      ? (liveMsg ?? currentStep?.citizenMsg ?? "Đang xử lý…")
+      : (currentStep?.citizenMsg ?? "Đang xử lý…");
 
   return (
     <div style={{ width: 1920, height: 1080, display: "flex", flexDirection: "column", background: "var(--ink-8)", position: "relative", overflow: "hidden" }}>
@@ -643,7 +754,9 @@ export function ProcedureSubmitScreen({
 
           {/* Footer info */}
           <div style={{ padding: "16px 28px", borderTop: "1px solid var(--ink-7)", background: "var(--ink-9)" }}>
-            <div style={{ fontSize: 12, color: "var(--ink-4)" }}>Mã phiên: <b style={{ color: "var(--ink-1)" }}>{currentJobId ? currentJobId.slice(0, 8).toUpperCase() : "DEMO"}</b></div>
+            <div style={{ fontSize: 12, color: "var(--ink-4)" }}>Mã phiên: <b style={{ color: mode === "real" ? "var(--green)" : "var(--ink-1)" }}>{currentJobId ? currentJobId.slice(0, 8).toUpperCase() : (mode === "loading" ? "…" : "DEMO")}</b></div>
+          {mode === "real" && <div style={{ fontSize: 10, color: "var(--green)", marginTop: 2 }}>● Đang nộp thật</div>}
+          {mode === "demo" && <div style={{ fontSize: 10, color: "var(--orange-dk)", marginTop: 2 }}>● Chế độ demo</div>}
             <div style={{ fontSize: 12, color: "var(--ink-4)", marginTop: 4 }}>Thời gian: <b style={{ color: "var(--ink-1)" }}>{elapsed}</b></div>
           </div>
         </div>
@@ -661,8 +774,8 @@ export function ProcedureSubmitScreen({
                 <div style={{ width: 10, height: 10, borderRadius: "50%", border: "1.5px solid var(--green)", position: "relative" }}>
                   <div style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--green)", position: "absolute", top: 1, left: 1 }} />
                 </div>
-                <span style={{ fontSize: 11.5, color: "var(--ink-3)", fontFamily: "monospace", letterSpacing: -.2 }}>
-                  dichvucong.gov.vn/thu-tuc/{currentStep?.id ?? ""}
+                <span style={{ fontSize: 11.5, color: "var(--ink-3)", fontFamily: "monospace", letterSpacing: -.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {currentUrl.replace(/^https?:\/\//, "")}
                 </span>
                 <div style={{ marginLeft: "auto" }}><Spinner size={13} color="var(--blue)" /></div>
               </div>
@@ -673,12 +786,56 @@ export function ProcedureSubmitScreen({
               </div>
             </div>
 
-            {/* Portal content */}
-            <div style={{ flex: 1, overflow: "hidden" }}>
-              {screenshot
-                ? <img src={screenshot} alt="DVC portal" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                : <SimPortal stepId={currentStep?.id ?? ""} action={currentStep?.portalAction ?? ""} />
-              }
+            {/* Live portal content — real Playwright screenshot streamed from runner */}
+            <div style={{ flex: 1, overflow: "hidden", background: "#fff", position: "relative" }}>
+              <img
+                ref={imgRef}
+                alt="Cổng dịch vụ công"
+                onPointerDown={handleFramePointerDown}
+                onPointerMove={handleFramePointerMove}
+                onPointerUp={finishFrameGesture}
+                onPointerCancel={handleFramePointerCancel}
+                onWheel={e => {
+                  e.preventDefault();
+                  sendScroll(e.deltaY, e.deltaX);
+                }}
+                onContextMenu={e => e.preventDefault()}
+                draggable={false}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                  objectPosition: "top",
+                  background: "#fff",
+                  cursor: mode === "real" ? "grab" : "default",
+                  opacity: hasScreenshot ? 1 : 0,
+                  touchAction: "none",
+                  userSelect: "none",
+                  willChange: "contents",
+                  transform: "translateZ(0)",
+                }}
+              />
+              {!hasScreenshot && (
+                <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18, background: "#f8fafc" }}>
+                  <Spinner size={40} color="var(--blue)" />
+                  <div style={{ fontSize: 17, fontWeight: 700, color: "var(--ink-2)" }}>
+                    Đang kết nối tới Cổng Dịch vụ công Quốc gia…
+                  </div>
+                  <div style={{ fontSize: 13, color: "var(--ink-4)", display: "flex", alignItems: "center", gap: 6 }}>
+                    <Icon name="shield" size={15} style={{ color: "var(--green)" }} />
+                    dichvucong.gov.vn — phiên tự động an toàn
+                  </div>
+                </div>
+              )}
+              {/* Live indicator */}
+              {mode === "real" && (
+                <div style={{ position: "absolute", top: 12, right: 12, display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999, background: "rgba(220,38,38,.92)", boxShadow: "var(--shadow-md)" }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#fff", animation: "wave 1.2s ease-in-out infinite" }} />
+                  <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", letterSpacing: .5 }}>TRỰC TIẾP</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -689,12 +846,30 @@ export function ProcedureSubmitScreen({
             boxShadow: "var(--shadow-sm)", flexShrink: 0,
           }}>
             <Spinner size={18} />
-            <span style={{ fontSize: 16, color: "var(--ink-2)", fontWeight: 600 }}>{currentStep?.citizenMsg}</span>
+            <span style={{ fontSize: 16, color: "var(--ink-2)", fontWeight: 600 }}>{statusMsg}</span>
             <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
               {[0, 1, 2].map(i => (
                 <div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", animation: `wave .9s ease-in-out ${i * 0.15}s infinite` }} />
               ))}
             </div>
+
+            {/* Interactive controls — only in real mode */}
+            {mode === "real" && (
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                <button onClick={() => sendScroll(-500)} title="Cuộn lên"
+                  style={ctrlBtn}>▲</button>
+                <button onClick={() => sendScroll(500)} title="Cuộn xuống"
+                  style={ctrlBtn}>▼</button>
+                <button onClick={() => setShowKeyboard(v => !v)}
+                  style={{ ...ctrlBtn, width: "auto", padding: "0 16px", gap: 8, background: showKeyboard ? "var(--blue)" : "#fff", color: showKeyboard ? "#fff" : "var(--ink-2)", display: "flex", alignItems: "center" }}>
+                  <span style={{ fontSize: 18 }}>⌨</span> Bàn phím
+                </button>
+                <button onClick={handleFinish}
+                  style={{ ...ctrlBtn, width: "auto", padding: "0 18px", gap: 8, background: "var(--green)", color: "#fff", border: "none", fontWeight: 800, display: "flex", alignItems: "center" }}>
+                  <Icon name="check" size={18} style={{ color: "#fff" }} /> Tôi đã hoàn tất
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -815,6 +990,15 @@ export function ProcedureSubmitScreen({
             </div>
           </div>
         </OverlayWrap>
+      )}
+
+      {/* ── On-screen keyboard for interactive remote control ────────────────── */}
+      {showKeyboard && mode === "real" && !done && !failed && (
+        <VirtualKeyboard
+          onChar={sendChar}
+          onKey={sendKey}
+          onClose={() => setShowKeyboard(false)}
+        />
       )}
     </div>
   );

@@ -18,7 +18,17 @@ import { LookupScreen } from "./components/screens/lookup";
 import { MaintenanceScreen } from "./components/screens/maintenance";
 import { HelpOverlay } from "./components/overlays/help";
 import { TimeoutOverlay } from "./components/overlays/timeout";
-import { deviceApi, KioskRuntimeConfig, KioskSessionData, sessionsApi } from "./lib/api";
+import { deviceApi, KioskRuntimeConfig, KioskSessionData, sessionsApi, proceduresApi } from "./lib/api";
+
+/** Map kiosk category id → seeded procedure code in DB */
+const CATEGORY_PROCEDURE_MAP: Record<string, string> = {
+  hotich:    "KHAISINH",
+  cutru:     "TAMTRU",
+  cccd:      "KHAISINH",
+  chungthuc: "KHAITU",
+  datdai:    "DATDAI_CN",
+  // kinhdoanh → not seeded yet, falls back to demo
+};
 
 type Screen =
   | "idle" | "home"
@@ -44,7 +54,7 @@ type DeviceSocket = {
 };
 
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION?.trim() || "1.0.0";
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 const INACTIVITY_MS = 180_000;
 const HEARTBEAT_MS = 15_000;
 
@@ -59,6 +69,7 @@ export default function KioskRoot() {
   const [session, setSession] = useState<KioskSessionData | null>(null);
   const [startingSession, setStartingSession] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
+  const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
 
   const fit = useCallback(() => {
@@ -79,11 +90,10 @@ export default function KioskRoot() {
 
   /* ── Read serial number from device.json (server-side, no env var) ─ */
   useEffect(() => {
-    fetch("/api/device")
-      .then(r => r.json())
-      .then((d: { serial: string }) => {
-        console.info(`[Kiosk] Device serial loaded: ${d.serial}`);
-        setDeviceSerial(d.serial);
+    loadDeviceSerial()
+      .then((serial) => {
+        console.info(`[Kiosk] Device serial loaded: ${serial}`);
+        setDeviceSerial(serial);
       })
       .catch((err) => {
         console.warn("[Kiosk] Failed to load device serial, using fallback:", err);
@@ -219,6 +229,23 @@ export default function KioskRoot() {
     }
   }
 
+  /** Called when citizen picks a service category in DiscoveryScreen.
+   *  Resolves the DB procedure ID in the background (fast, ~50ms);
+   *  ProcedureSubmitScreen falls back to demo if it resolves to null. */
+  const handleCategorySelect = useCallback(async (catId: string) => {
+    setScreen("checklist");
+    setSelectedProcedureId(null); // reset while resolving
+    const code = CATEGORY_PROCEDURE_MAP[catId];
+    if (!code) return; // no real procedure mapped → demo
+    try {
+      const results = await proceduresApi.findAll({ search: code });
+      const found = results.find(p => p.code === code) ?? results[0] ?? null;
+      if (found) setSelectedProcedureId(found.id);
+    } catch {
+      // ignore — ProcedureSubmitScreen will fall back to demo
+    }
+  }, []);
+
   function goHome() {
     setScreen("home");
     setShowHelp(false);
@@ -279,7 +306,7 @@ export default function KioskRoot() {
             {screen === "auth" && <AuthScreen {...common} onBack={goHome} onDone={() => setScreen("profile")} />}
             {screen === "profile" && <ProfileScreen {...common} onBack={() => setScreen("auth")} onContinue={() => setScreen("discovery")} />}
             {screen === "discovery" && (
-              <DiscoveryScreen {...common} onBack={() => setScreen("profile")} onSelectService={() => setScreen("checklist")} onAI={() => setScreen("ai")} />
+              <DiscoveryScreen {...common} onBack={() => setScreen("profile")} onSelectService={handleCategorySelect} onAI={() => setScreen("ai")} />
             )}
             {screen === "checklist" && (
               <ChecklistScreen {...common} onBack={() => setScreen("discovery")} onScan={() => setScreen("scan")} onContinue={() => setScreen("review")} />
@@ -291,12 +318,21 @@ export default function KioskRoot() {
                 {...common}
                 sessionId={session?.id}
                 deviceSerial={deviceSerial ?? undefined}
+                procedureId={selectedProcedureId ?? undefined}
                 onComplete={() => setScreen("success")}
               />
             )}
             {screen === "success" && <SuccessScreen onHome={goIdle} />}
             {screen === "ai" && <AIScreen {...common} onBack={goHome} />}
-            {screen === "copy-doc" && <CopyDocScreen {...common} onBack={goHome} />}
+            {screen === "copy-doc" && (
+              <CopyDocScreen
+                {...common}
+                onBack={goHome}
+                sessionId={session?.id}
+                kioskDeviceId={deviceConfig?.id}
+                deviceSerial={deviceSerial ?? undefined}
+              />
+            )}
             {screen === "queue" && (
               <QueueScreen {...common} onBack={goHome} sessionId={session?.id} kioskId={deviceConfig.id} />
             )}
@@ -331,6 +367,22 @@ async function collectDeviceMetrics(): Promise<NativeMetrics> {
   } catch {
     return {};
   }
+}
+
+async function loadDeviceSerial(): Promise<string> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const serial = await invoke<string>("get_device_serial");
+    if (serial.trim()) return serial.trim();
+  } catch {
+    // Browser development mode uses the Next.js fallback endpoint.
+  }
+
+  const response = await fetch("/api/device");
+  if (!response.ok) throw new Error(`Device identity request failed (${response.status})`);
+  const data = await response.json() as { serial?: string };
+  if (!data.serial?.trim()) throw new Error("Device identity is empty");
+  return data.serial.trim();
 }
 
 function getOperatingSystem() {

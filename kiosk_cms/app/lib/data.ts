@@ -84,6 +84,55 @@ export async function getKioskLocations() {
   });
 }
 
+/* ── Copy-Doc ──────────────────────────────────────── */
+export async function getCopyDocCategories() {
+  return prisma.copyDocCategory.findMany({
+    where: { deletedAt: null },
+    include: {
+      feeRules: { where: { isActive: true }, orderBy: { minQuantity: "asc" } },
+      _count: { select: { requests: true } },
+    },
+    orderBy: { sortOrder: "asc" },
+  });
+}
+
+export async function getCopyDocCategoryById(id: string) {
+  return prisma.copyDocCategory.findFirst({
+    where: { id, deletedAt: null },
+    include: {
+      feeRules: { orderBy: { minQuantity: "asc" } },
+      _count: { select: { requests: true } },
+    },
+  });
+}
+
+export async function getCopyDocRequests(status?: string, take = 50) {
+  return prisma.copyDocRequest.findMany({
+    where: {
+      deletedAt: null,
+      ...(status ? { status: status as never } : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    take,
+    include: {
+      category: true,
+      printJobs: { orderBy: { createdAt: "desc" }, take: 3 },
+      scanSessions: { orderBy: { createdAt: "desc" }, take: 3 },
+      pages: { orderBy: { pageIndex: "asc" } },
+    },
+  });
+}
+
+export async function getCopyDocStats() {
+  const [total, pending, completed, failed] = await Promise.all([
+    prisma.copyDocRequest.count({ where: { deletedAt: null } }),
+    prisma.copyDocRequest.count({ where: { deletedAt: null, status: { in: ["INITIATED","SCAN_PENDING","AI_PROCESSING","PREVIEW_READY","FEE_PENDING","GENERATING_PDF","PRINT_QUEUED","PRINTING"] as never[] } } }),
+    prisma.copyDocRequest.count({ where: { deletedAt: null, status: "COMPLETED" as never } }),
+    prisma.copyDocRequest.count({ where: { deletedAt: null, status: "FAILED" as never } }),
+  ]);
+  return { total, pending, completed, failed };
+}
+
 function getEffectiveDeviceStatus(device: { isEnabled: boolean; status: string; lastHeartbeat: Date | null }) {
   if (!device.isEnabled || device.status === "MAINTENANCE") return "MAINTENANCE";
   if (!device.lastHeartbeat || Date.now() - device.lastHeartbeat.getTime() > 60_000) return "OFFLINE";
@@ -178,6 +227,42 @@ export async function getProcedures() {
     },
     orderBy: { name: "asc" },
   });
+}
+
+/* ── Workflow Builder (Selenium automation) ────────── */
+/* The Selenium/Workflow models live in the API's Prisma schema, not the CMS
+ * copy — so we fetch over HTTP from the API instead of via the local client. */
+const WF_API = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3001";
+
+async function wfFetch<T>(path: string, fallback: T): Promise<T> {
+  try {
+    const res = await fetch(`${WF_API}${path}`, { cache: "no-store" });
+    if (!res.ok) return fallback;
+    return (await res.json()) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function getWorkflowBuilderData() {
+  const [templates, procedures, runners] = await Promise.all([
+    wfFetch<any[]>("/selenium/templates?includeInactive=true", []),
+    wfFetch<any[]>("/procedures", []),
+    wfFetch<any[]>("/selenium/runners", []),
+  ]);
+
+  return {
+    templates: (templates ?? []).map(t => ({
+      ...t,
+      steps: (t.steps ?? []).sort((a: any, b: any) => a.stepOrder - b.stepOrder),
+      _count: t._count ?? { jobs: 0 },
+    })),
+    procedures: (procedures ?? []).map((p: any) => ({ id: p.id, code: p.code, name: p.name })),
+    runners: (runners ?? []).map((r: any) => ({
+      id: r.id, runnerId: r.runnerId, name: r.name, status: r.status,
+      lastHeartbeat: r.lastHeartbeat ?? null, activeSessions: r.activeSessions ?? 0, capacity: r.capacity ?? 0,
+    })),
+  };
 }
 
 /* ── Citizens ──────────────────────────────────────── */

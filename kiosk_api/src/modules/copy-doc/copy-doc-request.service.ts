@@ -48,18 +48,60 @@ export class CopyDocRequestService {
     return req;
   }
 
-  async initiate(dto: InitiateCopyDocDto) {
-    await this.categories.findById(dto.categoryId); // validate category exists
+  async initiate(sessionId: string, kioskDeviceId?: string): Promise<any>;
+  async initiate(dto: InitiateCopyDocDto): Promise<any>;
+  async initiate(dtoOrSessionId: InitiateCopyDocDto | string, kioskDeviceId?: string) {
+    if (typeof dtoOrSessionId === 'string') {
+      const requestCode = genCode('SY');
+      return this.prisma.copyDocRequest.create({
+        data: {
+          sessionId: dtoOrSessionId,
+          kioskDeviceId,
+          requestCode,
+          categoryId: null,  // Set after OCR
+          status: CopyRequestStatus.INITIATED,
+        },
+      });
+    }
+    const dto = dtoOrSessionId;
+    if (dto.categoryId) {
+      await this.categories.findById(dto.categoryId); // validate category exists
+    }
     const requestCode = genCode('SY');
     return this.prisma.copyDocRequest.create({
       data: {
-        categoryId: dto.categoryId,
+        categoryId: dto.categoryId ?? null,
         sessionId: dto.sessionId,
         citizenId: dto.citizenId,
         kioskDeviceId: dto.kioskDeviceId,
         requestCode,
         quantity: dto.quantity ?? 1,
         status: CopyRequestStatus.INITIATED,
+      },
+      include: { category: true },
+    });
+  }
+
+  async applyAiResult(
+    requestId: string,
+    result: {
+      categoryId: string;
+      detectedTypeLabel: string;
+      detectedTypeConfidence: number;
+      ocrText?: string;
+      ocrOrientation?: number;
+    },
+  ) {
+    return this.prisma.copyDocRequest.update({
+      where: { id: requestId },
+      data: {
+        categoryId: result.categoryId,
+        detectedCategoryId: result.categoryId,
+        detectedTypeLabel: result.detectedTypeLabel,
+        detectedTypeConfidence: result.detectedTypeConfidence,
+        ...(result.ocrText !== undefined ? { ocrText: result.ocrText } : {}),
+        ...(result.ocrOrientation !== undefined ? { ocrOrientation: result.ocrOrientation } : {}),
+        status: CopyRequestStatus.PREVIEW_READY,
       },
       include: { category: true },
     });
@@ -81,6 +123,9 @@ export class CopyDocRequestService {
 
   async confirmQuantity(id: string, dto: ConfirmQuantityDto) {
     const req = await this.findById(id);
+    if (!req.categoryId) {
+      throw new BadRequestException('Category not yet set. Run OCR/AI detection first.');
+    }
     const { baseFee, processingFee, totalFee } = await this.categories.resolvePrice(
       req.categoryId,
       dto.quantity,

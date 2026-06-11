@@ -8,11 +8,11 @@ Create `.env` at monorepo root:
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/hcc_db
 REDIS_URL=redis://localhost:6379
 JWT_SECRET=replace-with-secure-value
-API_PORT=4000
-CMS_PORT=3001
-KIOSK_PORT=3002
-NEXT_PUBLIC_API_URL=http://127.0.0.1:4000
-NEXT_PUBLIC_WS_URL=http://127.0.0.1:4000
+API_PORT=3001
+CMS_PORT=3002
+KIOSK_PORT=3000
+NEXT_PUBLIC_API_URL=http://127.0.0.1:3001
+NEXT_PUBLIC_WS_URL=http://127.0.0.1:3001
 ```
 
 ## Install
@@ -32,10 +32,10 @@ npm run dev
 
 Services:
 
-- API: `http://127.0.0.1:4000`
-- Swagger: `http://127.0.0.1:4000/docs`
-- CMS: `http://127.0.0.1:3001`
-- Kiosk web shell: `http://127.0.0.1:3002`
+- API: `http://127.0.0.1:3001`
+- Swagger: `http://127.0.0.1:3001/docs`
+- CMS: `http://127.0.0.1:3002`
+- Kiosk web shell: `http://127.0.0.1:3000`
 
 ## Docker
 

@@ -1,18 +1,48 @@
 import {
   Controller, Get, Post, Patch, Delete, Param, Body, Query,
+  UseInterceptors, UploadedFile, BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import * as os from 'os';
+
+/**
+ * Replace localhost/127.0.0.1 with the machine's first non-internal IPv4 address.
+ * This ensures the QR URL is reachable from phones on the same network.
+ */
+function resolvePublicBaseUrl(rawBase: string): string {
+  if (!rawBase.includes('localhost') && !rawBase.includes('127.0.0.1')) {
+    return rawBase; // already a real hostname / configured IP
+  }
+  // Extract port from rawBase (e.g., "http://localhost:3001" → "3001")
+  const portMatch = rawBase.match(/:(\d+)\/?$/);
+  const port = portMatch ? portMatch[1] : '3001';
+  // Find first external IPv4 interface
+  const nets = os.networkInterfaces();
+  for (const ifaceList of Object.values(nets)) {
+    for (const iface of ifaceList ?? []) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return `http://${iface.address}:${port}`;
+      }
+    }
+  }
+  return rawBase; // fallback unchanged
+}
 import { CopyRequestStatus, PrintStatus } from '@prisma/client';
 import { CopyDocCategoryService } from './copy-doc-category.service';
 import { CopyDocRequestService } from './copy-doc-request.service';
 import { MobileScanService } from './mobile-scan.service';
 import { PrintJobService } from './print-job.service';
+import { CopyDocUploadService } from './copy-doc-upload.service';
+import { OcrMatchService } from './ocr-match.service';
+import { CopyDocPdfService } from './copy-doc-pdf.service';
 import {
   CreateCopyDocCategoryDto, UpdateCopyDocCategoryDto, CreateFeeRuleDto,
   InitiateCopyDocDto, UpdateCopyRequestStatusDto, ConfirmQuantityDto,
   ConfirmFeeDto, AdjustCornersDto,
   MobileUploadDto,
   CreatePrintJobDto, UpdatePrintJobDto,
+  ApplyAiResultDto,
 } from './copy-doc.dto';
 
 // ─── Categories ───────────────────────────────────────────────────────────────
@@ -70,7 +100,12 @@ export class CopyDocCategoryController {
 @ApiTags('copy-doc / requests')
 @Controller('copy-doc/requests')
 export class CopyDocRequestController {
-  constructor(private requests: CopyDocRequestService) {}
+  constructor(
+    private requests: CopyDocRequestService,
+    private upload: CopyDocUploadService,
+    private ocrMatch: OcrMatchService,
+    private pdf: CopyDocPdfService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'List copy requests' })
@@ -120,6 +155,71 @@ export class CopyDocRequestController {
   @Post(':id/cancel')
   @ApiOperation({ summary: 'Cancel a copy request' })
   cancel(@Param('id') id: string) { return this.requests.cancel(id); }
+
+  @Post('upload')
+  @ApiOperation({ summary: 'Upload document image (multipart/form-data)' })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadImage(
+    @UploadedFile() file: { buffer: Buffer; originalname: string; mimetype: string },
+    @Body('requestId') requestId: string,
+  ) {
+    if (!file) throw new BadRequestException('No file provided');
+    return this.upload.saveImage(requestId, file.buffer, file.originalname, file.mimetype);
+  }
+
+  @Post(':id/processed-image')
+  @ApiOperation({ summary: 'Crop page 0 using confirmed corners (back-compat)' })
+  async cropProcessedImage(
+    @Param('id') id: string,
+    @Body('corners') corners: { x: number; y: number }[],
+  ) {
+    if (!Array.isArray(corners) || corners.length !== 4) {
+      throw new BadRequestException('corners must be an array of 4 {x,y} objects');
+    }
+    return this.upload.cropPage(id, 0, corners);
+  }
+
+  @Post(':id/pages/:pageIndex/crop')
+  @ApiOperation({ summary: 'Crop a specific page using confirmed corners' })
+  async cropPage(
+    @Param('id') id: string,
+    @Param('pageIndex') pageIndex: string,
+    @Body('corners') corners: { x: number; y: number }[],
+  ) {
+    if (!Array.isArray(corners) || corners.length !== 4) {
+      throw new BadRequestException('corners must be an array of 4 {x,y} objects');
+    }
+    const idx = parseInt(pageIndex, 10);
+    if (Number.isNaN(idx) || idx < 0) throw new BadRequestException('Invalid pageIndex');
+    return this.upload.cropPage(id, idx, corners);
+  }
+
+  @Post(':id/trigger-ai')
+  @ApiOperation({ summary: 'Trigger AI OCR processing for request' })
+  async triggerAi(@Param('id') id: string) {
+    const result = await this.ocrMatch.simulateAiProcessing(id);
+    if (result.matchResult) {
+      const updated = await this.requests.applyAiResult(id, {
+        categoryId: result.matchResult.categoryId,
+        detectedTypeLabel: result.matchResult.categoryName,
+        detectedTypeConfidence: result.matchResult.confidence,
+      });
+      return { ...updated, corners: result.corners, ocrText: result.ocrText, matchResult: result.matchResult };
+    }
+    return { corners: result.corners, ocrText: result.ocrText, matchResult: null };
+  }
+
+  @Post(':id/apply-ai-result')
+  @ApiOperation({ summary: 'Apply AI result to request (set detected category + corners)' })
+  applyAiResult(@Param('id') id: string, @Body() body: ApplyAiResultDto) {
+    return this.requests.applyAiResult(id, body);
+  }
+
+  @Post(':id/generate-pdf')
+  @ApiOperation({ summary: 'Generate electronic copy PDF' })
+  generatePdf(@Param('id') id: string) {
+    return this.pdf.generateCopy(id);
+  }
 }
 
 // ─── Mobile Scan ──────────────────────────────────────────────────────────────
@@ -131,9 +231,21 @@ export class MobileScanController {
 
   @Post(':requestId/session')
   @ApiOperation({ summary: 'Create a mobile scan session (generates QR token)' })
-  createSession(@Param('requestId') requestId: string) {
-    const baseUrl = process.env.PUBLIC_API_URL ?? 'http://localhost:4000';
-    return this.scan.createScanSession(requestId, baseUrl);
+  createSession(
+    @Param('requestId') requestId: string,
+    @Body('baseUrl') baseUrl?: string,
+  ) {
+    const raw = baseUrl ?? process.env.PUBLIC_API_URL ?? 'http://localhost:3001';
+    const base = resolvePublicBaseUrl(raw);
+    console.log(`[MobileScan] QR base URL resolved: ${raw} → ${base}`);
+    return this.scan.createScanSession(requestId, base);
+  }
+
+  @Get('resolve-url')
+  @ApiOperation({ summary: 'Debug: show resolved public base URL for QR' })
+  getResolvedUrl(@Body('baseUrl') baseUrl?: string) {
+    const raw = baseUrl ?? process.env.PUBLIC_API_URL ?? 'http://localhost:3001';
+    return { raw, resolved: resolvePublicBaseUrl(raw) };
   }
 
   @Get(':requestId/sessions')

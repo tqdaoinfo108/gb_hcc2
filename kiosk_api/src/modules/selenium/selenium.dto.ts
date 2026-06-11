@@ -109,6 +109,21 @@ export class UpdateJobStatusDto {
   @ApiPropertyOptional() @IsOptional() @IsString() citizenMessage?: string;
 }
 
+export class InteractEventDto {
+  @ApiProperty({ description: 'click | touchStart | touchMove | touchEnd | type | key | scroll | finish' })
+  @IsString() type!: 'click' | 'touchStart' | 'touchMove' | 'touchEnd' | 'type' | 'key' | 'scroll' | 'finish';
+  @ApiPropertyOptional() @IsOptional() @IsInt() x?: number;
+  @ApiPropertyOptional() @IsOptional() @IsInt() y?: number;
+  @ApiPropertyOptional() @IsOptional() @IsString() text?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() key?: string;
+  @ApiPropertyOptional() @IsOptional() @IsInt() deltaX?: number;
+  @ApiPropertyOptional() @IsOptional() @IsInt() deltaY?: number;
+}
+
+export class ReportFocusDto {
+  @ApiProperty() @IsBoolean() focused!: boolean;
+}
+
 export class RequestInputDto {
   @ApiProperty({ description: 'OTP_SMS | VNEID_QR | CAPTCHA_WAIT | CONFIRM_DATA' })
   @IsString() inputType!: string;
@@ -130,4 +145,8 @@ export class AddScreenshotDto {
   @ApiPropertyOptional() @IsOptional() @IsInt() stepOrder?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() stepName?: string;
   @ApiPropertyOptional() @IsOptional() @IsInt() sizeBytes?: number;
+  /** Live page URL at capture time — forwarded to kiosk address bar (not persisted) */
+  @ApiPropertyOptional() @IsOptional() @IsString() pageUrl?: string;
+  /** Transient live frame. It is pushed to the kiosk but not stored in screenshot history. */
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isLive?: boolean;
 }
