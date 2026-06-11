@@ -517,6 +517,24 @@ export function ProcedureSubmitScreen({
     return () => { if (elapsedRef.current) clearInterval(elapsedRef.current); };
   }, []);
 
+  // Keep latest job id + terminal flag in refs for the unmount cleanup below.
+  const jobIdForCleanupRef = useRef<string | null>(null);
+  const terminatedRef = useRef(false);
+  useEffect(() => { jobIdForCleanupRef.current = currentJobId; }, [currentJobId]);
+  useEffect(() => { if (done || failed) terminatedRef.current = true; }, [done, failed]);
+
+  // On unmount (leaving the screen for ANY reason — Home, session timeout, route
+  // change), tell the runner to stop the live job so its browser closes and
+  // doesn't pile up. No-op if the job already finished.
+  useEffect(() => {
+    return () => {
+      const jid = jobIdForCleanupRef.current;
+      if (jid && !terminatedRef.current) {
+        seleniumApi.cancel(jid).catch(() => {});
+      }
+    };
+  }, []);
+
   // ── Simulation engine ──────────────────────────────────────────────────────
   const advanceStep = useCallback((idx: number) => {
     if (idx >= DEMO_STEPS.length) {

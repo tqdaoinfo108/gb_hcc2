@@ -15,6 +15,7 @@ const { chromium } = require('playwright');
 const api = require('./api');
 const { executeStep } = require('./steps');
 const { captureElementAt } = require('./recorder');
+const { createLiveStreamer } = require('./screencast');
 
 const RUNNER_ID   = process.env.RUNNER_ID   || 'runner-01';
 const RUNNER_NAME = process.env.RUNNER_NAME || 'Local Playwright Runner';
@@ -22,11 +23,20 @@ const BROWSER_MODE = (process.env.BROWSER_MODE || (process.env.HEADLESS === 'fal
 const HEADLESS    = BROWSER_MODE === 'headless';
 const HIDE_BROWSER_WINDOW = !HEADLESS && BROWSER_MODE !== 'visible';
 const HIDDEN_BROWSER_ARGS = ['--window-position=-32000,-32000', '--window-size=1366,900'];
-const POLL_MS     = Number(process.env.POLL_MS || 3000);
+// Poll fast so a dispatched job starts within ~1s instead of up to 3s.
+const POLL_MS     = Number(process.env.POLL_MS || 1000);
 const HEARTBEAT_MS = 20000;
 const LIVE_FRAME_INTERVAL_MS = Number(process.env.LIVE_FRAME_INTERVAL_MS || 140);
-// 2× render scale → sharper live frames on large kiosk displays.
-const LIVE_SCALE = Number(process.env.LIVE_SCALE || 2);
+// Render scale of the browser surface. Screencast downscales to SCREENCAST_MAX_W,
+// so 1.5× gives sharp frames without over-taxing the compositor.
+const LIVE_SCALE = Number(process.env.LIVE_SCALE || 1.5);
+// Auto-reclaim abandoned live sessions so browsers don't pile up.
+const INTERACTIVE_IDLE_MS = Number(process.env.INTERACTIVE_IDLE_MS || 120000); // 2 min no activity
+const INTERACTIVE_MAX_MS  = Number(process.env.INTERACTIVE_MAX_MS || 600000);  // 10 min hard cap
+const RECORD_IDLE_MS      = Number(process.env.RECORD_IDLE_MS || 300000);      // 5 min no activity
+// Delete generated screenshots older than this so disk doesn't grow unbounded.
+const SHOT_TTL_MS         = Number(process.env.SHOT_TTL_MS || 6 * 3600 * 1000); // 6 h
+const SHOT_SWEEP_MS       = Number(process.env.SHOT_SWEEP_MS || 30 * 60 * 1000); // every 30 min
 // Screenshots written here so the API can serve them at /uploads/selenium/...
 const SHOT_DIR = process.env.SHOT_DIR
   || path.resolve(__dirname, '../../kiosk_api/uploads/selenium');
@@ -149,6 +159,7 @@ async function runJob(job) {
   await api.updateStatus(job.id, { status: 'RUNNING', progressPercent: 0, citizenMessage: 'Đang khởi tạo quy trình…' });
 
   let browser, context, page;
+  const streamer = createLiveStreamer(job.id);
   try {
     browser = await chromium.launch({
       headless: HEADLESS,
@@ -157,7 +168,7 @@ async function runJob(job) {
     context = await browser.newContext({
       locale: 'vi-VN',
       viewport: { width: 1366, height: 900 },
-      // Render at 2× so live frames look crisp when scaled up on the kiosk
+      // Render slightly above 1× so frames are crisp when scaled up on the kiosk
       // display. Layout stays at 1366×900 CSS px, so click/scroll coords from
       // the kiosk (logical space) are unaffected.
       deviceScaleFactor: LIVE_SCALE,
@@ -169,6 +180,7 @@ async function runJob(job) {
       if (newPage !== page) {
         page = newPage;
         await newPage.bringToFront().catch(() => undefined);
+        await streamer.attach(newPage).catch(() => undefined); // stream the new tab
       }
     });
     page = await context.newPage();
@@ -178,9 +190,14 @@ async function runJob(job) {
     // ── Record mode: open the target URL and let the admin click to capture steps ──
     if (input.recordMode) {
       const url = input.recordUrl || job.template?.targetUrl || 'https://dichvucong.gov.vn/';
-      await recordLoop(job.id, page, url);
+      await streamer.attach(page).catch(() => undefined);
+      await recordLoop(job.id, page, url, streamer);
       return;
     }
+
+    // Start live screencast for the whole session — the citizen sees the portal
+    // paint live (event-driven), not waiting on per-step screenshots.
+    await streamer.attach(page).catch(() => undefined);
 
     // Navigate to the target URL up-front and push an early frame, so the kiosk
     // leaves the "đang kết nối" state as soon as the portal is visible — even
@@ -188,8 +205,8 @@ async function runJob(job) {
     // navigates (it would double-load the page).
     const firstNavigates = steps[0] && ['OPEN_URL', 'NAVIGATE'].includes(steps[0].stepType);
     if (job.template?.targetUrl && !firstNavigates) {
+      // Screencast already streams the load live; just kick off navigation.
       await page.goto(job.template.targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => undefined);
-      await captureLiveFrame(job.id, page, { stepOrder: 0, name: 'Đang mở cổng dịch vụ công' }).catch(() => undefined);
     }
 
     for (let i = 0; i < steps.length; i++) {
@@ -236,7 +253,7 @@ async function runJob(job) {
           currentStepOrder: step.stepOrder,
           citizenMessage: 'Tự động dừng tại bước này — mời bạn thao tác trực tiếp trên màn hình.',
         }).catch(() => undefined);
-        await interactiveLoop(job.id, page, outputData);
+        await interactiveLoop(job.id, page, outputData, streamer);
         await completeJob(job.id, outputData);
         return;
       }
@@ -245,7 +262,7 @@ async function runJob(job) {
 
     // All configured steps done — let the citizen review / finish on the live
     // frame before we mark the job complete (they tap "Tôi đã hoàn tất").
-    await interactiveLoop(job.id, page, outputData);
+    await interactiveLoop(job.id, page, outputData, streamer);
     await completeJob(job.id, outputData);
   } catch (err) {
     log(`job ${job.id} FAILED:`, err.message);
@@ -255,6 +272,7 @@ async function runJob(job) {
       citizenMessage: 'Rất tiếc, quy trình nộp hồ sơ chưa hoàn tất. Vui lòng thử lại hoặc nhờ nhân viên hỗ trợ.',
     }).catch(() => undefined);
   } finally {
+    await streamer.stop().catch(() => undefined);
     await context?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
     activeJobs--;
@@ -296,17 +314,18 @@ async function applyEvent(page, jobId, ev) {
 
 /** Let the citizen drive the live browser: apply taps/keys, stream screenshots,
  *  until they tap "Tôi đã hoàn tất" (finish event) or the job is cancelled. */
-async function interactiveLoop(jobId, initialPage, outputData) {
+async function interactiveLoop(jobId, initialPage, outputData, streamer) {
   log(`job ${jobId} — interactive mode (citizen driving the live portal)`);
   const istep = { stepOrder: 50, name: 'Thao tác trực tiếp' };
   const context = initialPage.context();
   let page = initialPage;
   // Discard any taps queued while automation was still running
   await api.drainInteractions(jobId).catch(() => undefined);
-  await captureLiveFrame(jobId, page, istep).catch(() => undefined);
+  if (streamer) await streamer.attach(page).catch(() => undefined);
+  else await captureLiveFrame(jobId, page, istep).catch(() => undefined);
 
-  const deadline = Date.now() + 20 * 60 * 1000; // 20-minute safety cap
-  let finished = false, lastShot = Date.now(), tick = 0, frameDirty = false;
+  const deadline = Date.now() + INTERACTIVE_MAX_MS;
+  let finished = false, lastShot = Date.now(), lastActivity = Date.now(), lastStatusCheck = Date.now();
 
   while (!finished && !shuttingDown && Date.now() < deadline) {
     const pages = context.pages().filter(candidate => !candidate.isClosed());
@@ -315,28 +334,37 @@ async function interactiveLoop(jobId, initialPage, outputData) {
       page = latestPage;
       await moveBrowserWindowOffscreen(page);
       await page.bringToFront().catch(() => undefined);
-      frameDirty = true;
+      if (streamer) await streamer.attach(page).catch(() => undefined);
     }
 
     let events = [];
     try { events = await api.drainInteractions(jobId); } catch { events = []; }
 
-    let changed = false;
     for (const ev of events) {
       if (ev.type === 'finish') { finished = true; break; }
-      try { await applyEvent(page, jobId, ev); changed = true; } catch { /* ignore single event error */ }
+      try { await applyEvent(page, jobId, ev); } catch { /* ignore single event error */ }
     }
-    if (changed) frameDirty = true;
+    if (events.length) lastActivity = Date.now();
 
+    // Citizen walked away — reclaim the browser instead of holding it open.
+    if (Date.now() - lastActivity > INTERACTIVE_IDLE_MS) {
+      log(`job ${jobId} — interactive idle ${Math.round(INTERACTIVE_IDLE_MS / 1000)}s, auto-closing`);
+      finished = true;
+    }
+
+    // Screencast pushes frames automatically. Safety net: if no frame has gone
+    // out for >1.5s (e.g. cast stalled mid-navigation), force one screenshot.
     const now = Date.now();
-    if ((frameDirty && now - lastShot >= LIVE_FRAME_INTERVAL_MS) || now - lastShot > 800) {
+    const stale = streamer ? !streamer.isFresh(1500) : (now - lastShot > 800);
+    if (stale && now - lastShot > 700) {
       await captureLiveFrame(jobId, page, istep).catch(() => undefined);
       lastShot = now;
-      frameDirty = false;
     }
 
-    // Every ~6s, opportunistically detect a submission/tracking code + check for cancel
-    if (++tick % 10 === 0) {
+    // Every ~2.5s: detect a submission/tracking code + check if the kiosk
+    // cancelled (citizen left the screen) so we close the browser promptly.
+    if (Date.now() - lastStatusCheck > 2500) {
+      lastStatusCheck = Date.now();
       try {
         const code = await page.evaluate(() => {
           const m = document.body?.innerText?.match(/(?:m[ãa]\s*h[ồo]\s*s[ơo]|m[ãa]\s*biên\s*nh[ậa]n)[:\s]*([A-Z0-9.\-\/]{5,})/i);
@@ -396,37 +424,53 @@ async function applyRecordEvent(page, jobId, ev) {
   }
 }
 
-async function recordLoop(jobId, page, targetUrl) {
+async function recordLoop(jobId, page, targetUrl, streamer) {
   log(`job ${jobId} — RECORD mode → ${targetUrl}`);
   await api.updateStatus(jobId, { status: 'RUNNING', progressPercent: 0, citizenMessage: 'Đang ghi quy trình…' }).catch(() => undefined);
   await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => undefined);
   await api.drainInteractions(jobId).catch(() => undefined);
-  await captureLiveFrame(jobId, page, { stepOrder: 0, name: 'record' }).catch(() => undefined);
+  if (streamer) await streamer.attach(page).catch(() => undefined);
+  else await captureLiveFrame(jobId, page, { stepOrder: 0, name: 'record' }).catch(() => undefined);
   // Record the opening navigation as the first step
   await api.recordAction(jobId, { kind: 'open', url: targetUrl }).catch(() => undefined);
 
-  const deadline = Date.now() + 30 * 60 * 1000;
-  let finished = false, lastShot = Date.now(), frameDirty = true, tick = 0;
+  const deadline = Date.now() + INTERACTIVE_MAX_MS;
+  let finished = false, lastShot = Date.now(), lastActivity = Date.now(), lastStatusCheck = Date.now();
 
   while (!finished && !shuttingDown && Date.now() < deadline) {
     const pages = page.context().pages().filter((p) => !p.isClosed());
     const latest = pages[pages.length - 1];
-    if (latest && latest !== page) { page = latest; await moveBrowserWindowOffscreen(page); await page.bringToFront().catch(() => undefined); frameDirty = true; }
+    if (latest && latest !== page) { page = latest; await moveBrowserWindowOffscreen(page); await page.bringToFront().catch(() => undefined); if (streamer) await streamer.attach(page).catch(() => undefined); }
 
     let events = [];
     try { events = await api.drainInteractions(jobId); } catch { events = []; }
     for (const ev of events) {
       if (ev.type === 'finish') { finished = true; break; }
-      try { await applyRecordEvent(page, jobId, ev); frameDirty = true; } catch (e) { log('record ev err', e.message); }
+      try { await applyRecordEvent(page, jobId, ev); } catch (e) { log('record ev err', e.message); }
+    }
+    if (events.length) lastActivity = Date.now();
+
+    // Admin closed the recorder without "finish", or job cancelled → reclaim.
+    if (Date.now() - lastActivity > RECORD_IDLE_MS) {
+      log(`job ${jobId} — record idle ${Math.round(RECORD_IDLE_MS / 1000)}s, auto-closing`);
+      finished = true;
+    }
+    if (Date.now() - lastStatusCheck > 2500) {
+      lastStatusCheck = Date.now();
+      try {
+        const job = await api.getJob(jobId);
+        if (job && ['CANCELLED', 'FAILED', 'COMPLETED'].includes(job.status)) finished = true;
+      } catch { /* ignore */ }
     }
 
+    // Screencast streams automatically; safety net only if the cast stalls.
     const now = Date.now();
-    if ((frameDirty && now - lastShot >= LIVE_FRAME_INTERVAL_MS) || now - lastShot > 700) {
+    const stale = streamer ? !streamer.isFresh(1500) : (now - lastShot > 700);
+    if (stale && now - lastShot > 700) {
       await captureLiveFrame(jobId, page, { stepOrder: 0, name: 'record' }).catch(() => undefined);
-      lastShot = now; frameDirty = false;
+      lastShot = now;
     }
     await sleep(events.length ? 20 : 60);
-    tick++;
   }
 
   await api.updateStatus(jobId, { status: 'COMPLETED', progressPercent: 100, citizenMessage: 'Đã kết thúc ghi quy trình.' }).catch(() => undefined);
@@ -447,9 +491,10 @@ function citizenMsg(step) {
 
 async function captureShot(jobId, page, step) {
   fs.mkdirSync(SHOT_DIR, { recursive: true });
-  const file = `${jobId}_s${step.stepOrder || 0}_${Date.now()}.png`;
+  // JPEG (not PNG) → a fraction of the size for the persisted step history.
+  const file = `${jobId}_s${step.stepOrder || 0}_${Date.now()}.jpg`;
   const abs = path.join(SHOT_DIR, file);
-  await page.screenshot({ path: abs, fullPage: false });
+  await page.screenshot({ path: abs, type: 'jpeg', quality: 70, fullPage: false });
   const size = fs.statSync(abs).size;
   let pageUrl;
   try { pageUrl = page.url(); } catch { /* page may be closed */ }
@@ -480,6 +525,32 @@ async function captureLiveFrame(jobId, page, step) {
 
 /* ── Lifecycle ───────────────────────────────────────────── */
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/** Delete generated screenshots older than SHOT_TTL_MS so disk stays bounded. */
+function sweepOldShots() {
+  const dirs = [SHOT_DIR, path.join(SHOT_DIR, 'live')];
+  const now = Date.now();
+  let removed = 0;
+  for (const dir of dirs) {
+    let entries;
+    try { entries = fs.readdirSync(dir); } catch { continue; }
+    for (const f of entries) {
+      const fp = path.join(dir, f);
+      try {
+        const st = fs.statSync(fp);
+        if (st.isFile() && now - st.mtimeMs > SHOT_TTL_MS) { fs.unlinkSync(fp); removed++; }
+      } catch { /* file vanished / locked — skip */ }
+    }
+  }
+  if (removed) log(`cleanup: removed ${removed} screenshot file(s) older than ${Math.round(SHOT_TTL_MS / 3600000)}h`);
+}
+
+async function sweepLoop() {
+  while (!shuttingDown) {
+    try { sweepOldShots(); } catch { /* ignore */ }
+    await sleep(SHOT_SWEEP_MS);
+  }
+}
 
 async function register() {
   // Retry until the API is reachable (it may still be booting from start.bat)
@@ -530,6 +601,7 @@ async function main() {
   await register();
   heartbeatLoop();
   pollLoop();
+  sweepLoop(); // prune old screenshots so disk doesn't grow unbounded
   log('polling for jobs…');
 }
 

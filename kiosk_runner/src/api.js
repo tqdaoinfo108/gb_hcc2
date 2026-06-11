@@ -28,6 +28,9 @@ module.exports = {
   /** Push a live frame as base64 JPEG — relayed to the kiosk/CMS as binary over WS. */
   sendFrame: (id, jpegBuffer, meta = {}) =>
     req('POST', `/selenium/jobs/${id}/frame`, { b64: jpegBuffer.toString('base64'), ...meta }),
+  /** Push a live frame already encoded as base64 (e.g. from CDP screencast). */
+  sendFrameB64: (id, b64, meta = {}) =>
+    req('POST', `/selenium/jobs/${id}/frame`, { b64, ...meta }),
   requestInput: (id, inputType, payload) => req('POST', `/selenium/jobs/${id}/request-input`, { inputType, payload }),
   pollInput: (id) => req('GET', `/selenium/jobs/${id}/poll-input`),
   // Interactive remote control
