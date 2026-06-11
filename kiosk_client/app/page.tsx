@@ -18,17 +18,7 @@ import { LookupScreen } from "./components/screens/lookup";
 import { MaintenanceScreen } from "./components/screens/maintenance";
 import { HelpOverlay } from "./components/overlays/help";
 import { TimeoutOverlay } from "./components/overlays/timeout";
-import { deviceApi, KioskRuntimeConfig, KioskSessionData, sessionsApi, proceduresApi } from "./lib/api";
-
-/** Map kiosk category id → seeded procedure code in DB */
-const CATEGORY_PROCEDURE_MAP: Record<string, string> = {
-  hotich:    "KHAISINH",
-  cutru:     "TAMTRU",
-  cccd:      "KHAISINH",
-  chungthuc: "KHAITU",
-  datdai:    "DATDAI_CN",
-  // kinhdoanh → not seeded yet, falls back to demo
-};
+import { deviceApi, KioskRuntimeConfig, KioskSessionData, sessionsApi } from "./lib/api";
 
 type Screen =
   | "idle" | "home"
@@ -70,6 +60,7 @@ export default function KioskRoot() {
   const [startingSession, setStartingSession] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
+  const [selectedProcedureName, setSelectedProcedureName] = useState<string>("");
   const canvasRef = useRef<HTMLDivElement>(null);
 
   const fit = useCallback(() => {
@@ -229,21 +220,12 @@ export default function KioskRoot() {
     }
   }
 
-  /** Called when citizen picks a service category in DiscoveryScreen.
-   *  Resolves the DB procedure ID in the background (fast, ~50ms);
-   *  ProcedureSubmitScreen falls back to demo if it resolves to null. */
-  const handleCategorySelect = useCallback(async (catId: string) => {
-    setScreen("checklist");
-    setSelectedProcedureId(null); // reset while resolving
-    const code = CATEGORY_PROCEDURE_MAP[catId];
-    if (!code) return; // no real procedure mapped → demo
-    try {
-      const results = await proceduresApi.findAll({ search: code });
-      const found = results.find(p => p.code === code) ?? results[0] ?? null;
-      if (found) setSelectedProcedureId(found.id);
-    } catch {
-      // ignore — ProcedureSubmitScreen will fall back to demo
-    }
+  /** Citizen picked a concrete procedure in DiscoveryScreen → go straight to
+   *  the submission screen (skip the "Hồ sơ cần chuẩn bị" checklist). */
+  const handleSelectProcedure = useCallback((procedureId: string, _online: boolean, name: string) => {
+    setSelectedProcedureId(procedureId);
+    setSelectedProcedureName(name);
+    setScreen("procedure-submit");
   }, []);
 
   function goHome() {
@@ -306,7 +288,7 @@ export default function KioskRoot() {
             {screen === "auth" && <AuthScreen {...common} onBack={goHome} onDone={() => setScreen("profile")} />}
             {screen === "profile" && <ProfileScreen {...common} onBack={() => setScreen("auth")} onContinue={() => setScreen("discovery")} />}
             {screen === "discovery" && (
-              <DiscoveryScreen {...common} onBack={() => setScreen("profile")} onSelectService={handleCategorySelect} onAI={() => setScreen("ai")} />
+              <DiscoveryScreen {...common} onBack={() => setScreen("profile")} onSelectProcedure={handleSelectProcedure} onAI={() => setScreen("ai")} />
             )}
             {screen === "checklist" && (
               <ChecklistScreen {...common} onBack={() => setScreen("discovery")} onScan={() => setScreen("scan")} onContinue={() => setScreen("review")} />
@@ -319,6 +301,8 @@ export default function KioskRoot() {
                 sessionId={session?.id}
                 deviceSerial={deviceSerial ?? undefined}
                 procedureId={selectedProcedureId ?? undefined}
+                procedureName={selectedProcedureName || undefined}
+                onBack={() => setScreen("discovery")}
                 onComplete={() => setScreen("success")}
               />
             )}

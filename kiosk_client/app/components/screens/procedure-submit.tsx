@@ -12,6 +12,7 @@ interface Props {
   onLangChange: (l: "vi" | "en") => void;
   onHome: () => void;
   onHelp: () => void;
+  onBack?: () => void;
   onComplete: (result: SubmitResult) => void;
   sessionId?: string;
   deviceSerial?: string;
@@ -30,7 +31,7 @@ export interface SubmitResult {
 }
 
 type StepStatus = "done" | "active" | "pending" | "error";
-type InteractionType = "CONFIRM_DATA" | "OTP_SMS" | "VNEID_QR" | "CAPTCHA_WAIT";
+type InteractionType = "CONFIRM_DATA" | "OTP_SMS" | "VNEID_QR" | "CAPTCHA_WAIT" | "UPLOAD";
 
 interface DemoStep {
   id: string;
@@ -335,6 +336,71 @@ function CaptchaOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
+function UploadOverlay({ jobId, onCancel }: { jobId: string; onCancel: () => void }) {
+  const [session, setSession] = useState<{ token: string; qrUrl: string; mobileUrl: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    seleniumApi.createUploadSession(jobId).then(setSession).catch(() => setErr("Không tạo được phiên tải tệp."));
+  }, [jobId]);
+
+  async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !session) return;
+    setBusy(true); setErr(null);
+    try { await seleniumApi.uploadKioskFile(session.token, file); /* overlay closes on upload_received */ }
+    catch { setErr("Tải tệp thất bại, vui lòng thử lại."); setBusy(false); }
+  }
+
+  return (
+    <OverlayWrap>
+      <div className="card" style={{ width: 720, borderRadius: 28, padding: "40px 44px", display: "flex", flexDirection: "column", gap: 22 }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "var(--ink-0)" }}>Đính kèm tài liệu</div>
+          <div style={{ fontSize: 15, color: "var(--ink-4)", marginTop: 6 }}>
+            Cổng dịch vụ công yêu cầu tải tệp. Chọn một trong hai cách bên dưới.
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 18 }}>
+          {/* Option 1: kiosk camera / file */}
+          <div style={{ flex: 1, border: "1.5px solid var(--ink-7)", borderRadius: 18, padding: "26px 22px", display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center" }}>
+            <div style={{ width: 56, height: 56, borderRadius: 14, background: "var(--blue-lt)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Icon name="scan" size={28} style={{ color: "var(--blue)" }} />
+            </div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "var(--ink-0)" }}>Chụp / chọn tại kiosk</div>
+            <div style={{ fontSize: 13, color: "var(--ink-4)", lineHeight: 1.5 }}>Dùng máy quét hoặc camera của kiosk để chụp giấy tờ</div>
+            <input ref={fileRef} type="file" accept="image/*,application/pdf" capture="environment" onChange={onPick} style={{ display: "none" }} />
+            <button className="btn btn-primary btn-md" disabled={!session || busy} onClick={() => fileRef.current?.click()} style={{ width: "100%", marginTop: "auto" }}>
+              {busy ? <Spinner size={16} color="#fff" /> : <Icon name="scan" size={18} />} {busy ? "Đang tải lên…" : "Chụp / chọn tệp"}
+            </button>
+          </div>
+
+          {/* Option 2: QR phone upload */}
+          <div style={{ flex: 1, border: "1.5px solid var(--ink-7)", borderRadius: 18, padding: "26px 22px", display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center" }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "var(--ink-0)" }}>Tải từ điện thoại</div>
+            <div style={{ fontSize: 13, color: "var(--ink-4)", lineHeight: 1.5 }}>Quét mã QR bằng điện thoại để chụp & gửi tệp lên kiosk</div>
+            <div style={{ padding: 12, background: "#fff", borderRadius: 14, border: "2px solid var(--ink-7)", minHeight: 180, minWidth: 180, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {session
+                ? <img src={session.qrUrl} alt="QR tải tệp" width={156} height={156} style={{ display: "block" }} />
+                : <Spinner size={28} />}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-5)" }}>Mã có hiệu lực trong phiên hiện tại</div>
+          </div>
+        </div>
+
+        {err && <div style={{ color: "var(--red)", fontSize: 14, textAlign: "center", fontWeight: 600 }}>{err}</div>}
+
+        <button className="btn btn-ghost btn-md" onClick={onCancel} style={{ alignSelf: "center", minWidth: 200 }}>
+          <Icon name="x" size={18} /> Bỏ qua / Để sau
+        </button>
+      </div>
+    </OverlayWrap>
+  );
+}
+
 function SuccessOverlay({ code, onDone }: { code: string; onDone: () => void }) {
   return (
     <OverlayWrap>
@@ -554,6 +620,12 @@ export function ProcedureSubmitScreen({
       socket.on("selenium:input_focus", (data: { jobId: string; focused: boolean }) => {
         if (data.jobId !== currentJobId) return;
         if (data.focused) setShowKeyboard(true);
+      });
+
+      // File uploaded (phone or kiosk) → close the upload overlay
+      socket.on("selenium:upload_received", (data: { jobId: string }) => {
+        if (data.jobId !== currentJobId) return;
+        setInteraction(prev => (prev === "UPLOAD" ? null : prev));
       });
     });
 
@@ -963,6 +1035,9 @@ export function ProcedureSubmitScreen({
       )}
       {interaction === "CAPTCHA_WAIT" && (
         <CaptchaOverlay onClose={() => handleInteractionDone("STAFF_RESOLVED")} />
+      )}
+      {interaction === "UPLOAD" && currentJobId && (
+        <UploadOverlay jobId={currentJobId} onCancel={() => setInteraction(null)} />
       )}
 
       {/* ── Done overlay ─────────────────────────────────────────────────────── */}

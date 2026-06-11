@@ -30,4 +30,6 @@ module.exports = {
   // Interactive remote control
   drainInteractions: (id) => req('GET', `/selenium/jobs/${id}/interactions`),
   reportFocus: (id, focused) => req('POST', `/selenium/jobs/${id}/report-focus`, { focused }),
+  // Recorder
+  recordAction: (id, action) => req('POST', `/selenium/jobs/${id}/record-action`, action),
 };

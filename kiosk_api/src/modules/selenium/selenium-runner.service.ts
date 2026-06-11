@@ -30,8 +30,26 @@ export class SeleniumRunnerService {
   }
 
   async register(dto: RegisterRunnerDto) {
+    const runnerId = dto.runnerId.trim();
+
+    // A fresh runner process has no in-flight work. Reconcile DB state: any
+    // jobs left RUNNING/QUEUED by a previous (now-dead) instance are orphans —
+    // fail them so kiosks stop waiting on frames that will never arrive, and
+    // reset the live session counter.
+    const existing = await this.prisma.seleniumRunner.findUnique({ where: { runnerId } });
+    if (existing) {
+      await this.prisma.seleniumJob.updateMany({
+        where: { runnerId: existing.id, status: { in: ['RUNNING', 'QUEUED', 'PAUSED'] } },
+        data: {
+          status: 'FAILED',
+          failedAt: new Date(),
+          failReason: 'Runner restarted — phiên trước bị gián đoạn.',
+        },
+      });
+    }
+
     return this.prisma.seleniumRunner.upsert({
-      where: { runnerId: dto.runnerId.trim() },
+      where: { runnerId },
       update: {
         name: dto.name.trim(),
         host: dto.host.trim(),
@@ -40,6 +58,7 @@ export class SeleniumRunnerService {
         browserType: dto.browserType,
         version: dto.version?.trim(),
         status: RunnerStatus.ONLINE,
+        activeSessions: 0,
         lastHeartbeatAt: new Date(),
         deletedAt: null,
         metadata: dto.metadata as any,

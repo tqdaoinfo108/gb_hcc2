@@ -45,9 +45,10 @@ const NAV: NavGroup[] = [
     label: "Dịch vụ công",
     icon: "📋",
     items: [
-      { label: "Hồ sơ",     href: "/applications", icon: "📋" },
-      { label: "Thủ tục",   href: "/procedures",   icon: "📄" },
-      { label: "Công dân",  href: "/citizens",     icon: "👤" },
+      { label: "Hồ sơ",       href: "/applications", icon: "📋" },
+      { label: "Thủ tục",     href: "/procedures",   icon: "📄" },
+      { label: "Quy trình",   href: "/workflows",    icon: "⚙️" },
+      { label: "Công dân",    href: "/citizens",     icon: "👤" },
     ],
   },
   {
@@ -66,7 +67,6 @@ const NAV: NavGroup[] = [
       { label: "Trợ lý AI",   href: "/ai-monitor", icon: "🤖" },
       { label: "Phản hồi",    href: "/feedback",   icon: "⭐" },
       { label: "Bộ chọn",     href: "/selectors",  icon: "🎛️" },
-      { label: "Quy trình",   href: "/workflows",  icon: "⚙️" },
     ],
   },
   {

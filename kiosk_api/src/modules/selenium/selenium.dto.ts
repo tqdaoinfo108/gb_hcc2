@@ -110,18 +110,46 @@ export class UpdateJobStatusDto {
 }
 
 export class InteractEventDto {
-  @ApiProperty({ description: 'click | touchStart | touchMove | touchEnd | type | key | scroll | finish' })
-  @IsString() type!: 'click' | 'touchStart' | 'touchMove' | 'touchEnd' | 'type' | 'key' | 'scroll' | 'finish';
+  @ApiProperty({ description: 'click | touchStart | touchMove | touchEnd | type | key | scroll | fill | finish' })
+  @IsString() type!: 'click' | 'touchStart' | 'touchMove' | 'touchEnd' | 'type' | 'key' | 'scroll' | 'fill' | 'finish';
   @ApiPropertyOptional() @IsOptional() @IsInt() x?: number;
   @ApiPropertyOptional() @IsOptional() @IsInt() y?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() text?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() key?: string;
   @ApiPropertyOptional() @IsOptional() @IsInt() deltaX?: number;
   @ApiPropertyOptional() @IsOptional() @IsInt() deltaY?: number;
+  @ApiPropertyOptional() @IsOptional() @IsString() selector?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() selectorType?: string;
 }
 
 export class ReportFocusDto {
   @ApiProperty() @IsBoolean() focused!: boolean;
+}
+
+export class StartRecordingDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() templateId?: string;
+  @ApiProperty() @IsString() url!: string;
+}
+
+export class RecordActionDto {
+  @ApiProperty() @IsString() kind!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() selector?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() selectorType?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() tag?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() inputType?: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isInput?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isSelect?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isCheckable?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsString() text?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() placeholder?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() href?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() url?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() value?: string;
+}
+
+export class ReplaceStepsDto {
+  @ApiProperty({ type: [Object] }) @IsArray() steps!: Array<Record<string, unknown>>;
 }
 
 export class RequestInputDto {

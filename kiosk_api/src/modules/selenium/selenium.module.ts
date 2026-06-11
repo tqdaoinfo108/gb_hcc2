@@ -7,12 +7,14 @@ import {
   SeleniumRunnerController,
   SeleniumJobController,
 } from './selenium.controller';
+import { SeleniumUploadController } from './selenium-upload.controller';
 
 @Module({
   controllers: [
     WorkflowTemplateController,
     SeleniumRunnerController,
     SeleniumJobController,
+    SeleniumUploadController,
   ],
   providers: [
     WorkflowTemplateService,

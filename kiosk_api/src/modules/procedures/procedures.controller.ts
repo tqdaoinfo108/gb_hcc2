@@ -21,6 +21,12 @@ export class ProceduresController {
     return this.service.getCategories();
   }
 
+  @Get('grouped')
+  @ApiOperation({ summary: 'Categories with their procedures + online flag (kiosk accordion)' })
+  getGrouped() {
+    return this.service.getGroupedByCategory();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get procedure detail with requirements' })
   findOne(@Param('id') id: string) {

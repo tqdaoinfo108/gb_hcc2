@@ -14,6 +14,7 @@ const path = require('path');
 const { chromium } = require('playwright');
 const api = require('./api');
 const { executeStep } = require('./steps');
+const { captureElementAt } = require('./recorder');
 
 const RUNNER_ID   = process.env.RUNNER_ID   || 'runner-01';
 const RUNNER_NAME = process.env.RUNNER_NAME || 'Local Playwright Runner';
@@ -97,9 +98,9 @@ async function waitForInput(jobId, timeoutMs) {
 
 /** Turn a citizen-input payload into a local file path for upload. */
 async function materializeFile(input) {
-  // input may carry { fileUrl } (served by API) or { filePath }
+  // input may carry { fileUrl } / { value } / { payload:{fileUrl} } / { filePath }
   if (input.filePath && fs.existsSync(input.filePath)) return input.filePath;
-  const url = input.fileUrl || input.url;
+  const url = input.fileUrl || input.url || input.value || input.payload?.fileUrl;
   if (!url) throw new Error('Upload input had no file');
   const abs = url.startsWith('http') ? url : `${api.API_BASE}${url}`;
   const res = await fetch(abs);
@@ -108,6 +109,28 @@ async function materializeFile(input) {
   const tmp = path.join(os.tmpdir(), `kiosk_upload_${Date.now()}_${path.basename(url).slice(-40)}`);
   fs.writeFileSync(tmp, buf);
   return tmp;
+}
+
+/**
+ * When the portal opens a file picker, intercept it: ask the kiosk for a file
+ * (kiosk camera or phone QR), wait for it, then feed it to the file input.
+ * Keeps the OS file dialog from ever appearing on the kiosk screen.
+ */
+function attachFileChooser(page, jobId) {
+  page.on('filechooser', async (chooser) => {
+    log(`job ${jobId} — portal requested a file upload`);
+    try {
+      await api.requestInput(jobId, 'UPLOAD', { uploadField: '' }).catch(() => undefined);
+      const input = await waitForInput(jobId, 5 * 60 * 1000); // 5 min for citizen
+      if (!input) { await chooser.setFiles([]).catch(() => undefined); return; }
+      const filePath = await materializeFile(input);
+      await chooser.setFiles(filePath);
+      log(`job ${jobId} — uploaded ${filePath}`);
+    } catch (e) {
+      log(`job ${jobId} — filechooser error: ${e.message}`);
+      await chooser.setFiles([]).catch(() => undefined);
+    }
+  });
 }
 
 /* ── Execute one job end-to-end ──────────────────────────── */
@@ -136,6 +159,7 @@ async function runJob(job) {
     });
     context.on('page', async (newPage) => {
       await moveBrowserWindowOffscreen(newPage);
+      attachFileChooser(newPage, job.id);
       if (newPage !== page) {
         page = newPage;
         await newPage.bringToFront().catch(() => undefined);
@@ -143,6 +167,14 @@ async function runJob(job) {
     });
     page = await context.newPage();
     await moveBrowserWindowOffscreen(page);
+    attachFileChooser(page, job.id);
+
+    // ── Record mode: open the target URL and let the admin click to capture steps ──
+    if (input.recordMode) {
+      const url = input.recordUrl || job.template?.targetUrl || 'https://dichvucong.gov.vn/';
+      await recordLoop(job.id, page, url);
+      return;
+    }
 
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
@@ -316,6 +348,73 @@ async function completeJob(jobId, outputData) {
       : 'Đã hoàn tất phiên nộp hồ sơ.',
   }).catch(() => undefined);
   log(`job ${jobId} COMPLETED`, outputData);
+}
+
+/* ── Record mode (admin builds a template by clicking the live portal) ───── */
+async function applyRecordEvent(page, jobId, ev) {
+  if (ev.type === 'click') {
+    if (typeof ev.x !== 'number' || typeof ev.y !== 'number') return;
+    const info = await captureElementAt(page, ev.x, ev.y).catch(() => null);
+    await page.mouse.click(ev.x, ev.y).catch(() => undefined);
+    if (info && info.selector) {
+      await api.recordAction(jobId, { kind: 'click', ...info }).catch(() => undefined);
+    }
+  } else if (ev.type === 'fill') {
+    if (!ev.selector) return;
+    try {
+      const loc = page.locator(ev.selector).first();
+      await loc.fill(ev.text || '', { timeout: 5000 });
+    } catch {
+      // fallback: focus + type
+      try { await page.locator(ev.selector).first().click({ timeout: 3000 }); await page.keyboard.type(ev.text || '', { delay: 10 }); } catch { /* ignore */ }
+    }
+    await api.recordAction(jobId, {
+      kind: 'fill', selector: ev.selector, selectorType: ev.selectorType || 'CSS', value: ev.text || '',
+    }).catch(() => undefined);
+  } else if (ev.type === 'scroll') {
+    await page.mouse.wheel(ev.deltaX || 0, ev.deltaY || 0).catch(() => undefined);
+  } else if (ev.type === 'type') {
+    if (ev.text) await page.keyboard.type(ev.text, { delay: 12 }).catch(() => undefined);
+  } else if (ev.type === 'key') {
+    if (ev.key) await page.keyboard.press(ev.key).catch(() => undefined);
+  }
+}
+
+async function recordLoop(jobId, page, targetUrl) {
+  log(`job ${jobId} — RECORD mode → ${targetUrl}`);
+  await api.updateStatus(jobId, { status: 'RUNNING', progressPercent: 0, citizenMessage: 'Đang ghi quy trình…' }).catch(() => undefined);
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => undefined);
+  await api.drainInteractions(jobId).catch(() => undefined);
+  await captureLiveFrame(jobId, page, { stepOrder: 0, name: 'record' }).catch(() => undefined);
+  // Record the opening navigation as the first step
+  await api.recordAction(jobId, { kind: 'open', url: targetUrl }).catch(() => undefined);
+
+  const deadline = Date.now() + 30 * 60 * 1000;
+  let finished = false, lastShot = Date.now(), frameDirty = true, tick = 0;
+
+  while (!finished && !shuttingDown && Date.now() < deadline) {
+    const pages = page.context().pages().filter((p) => !p.isClosed());
+    const latest = pages[pages.length - 1];
+    if (latest && latest !== page) { page = latest; await moveBrowserWindowOffscreen(page); await page.bringToFront().catch(() => undefined); frameDirty = true; }
+
+    let events = [];
+    try { events = await api.drainInteractions(jobId); } catch { events = []; }
+    for (const ev of events) {
+      if (ev.type === 'finish') { finished = true; break; }
+      try { await applyRecordEvent(page, jobId, ev); frameDirty = true; } catch (e) { log('record ev err', e.message); }
+    }
+
+    const now = Date.now();
+    if ((frameDirty && now - lastShot >= LIVE_FRAME_INTERVAL_MS) || now - lastShot > 700) {
+      await captureLiveFrame(jobId, page, { stepOrder: 0, name: 'record' }).catch(() => undefined);
+      lastShot = now; frameDirty = false;
+    }
+    await sleep(events.length ? 20 : 60);
+    tick++;
+  }
+
+  await api.updateStatus(jobId, { status: 'COMPLETED', progressPercent: 100, citizenMessage: 'Đã kết thúc ghi quy trình.' }).catch(() => undefined);
+  log(`job ${jobId} — record finished`);
 }
 
 function citizenMsg(step) {

@@ -1,5 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { JobStatus, LogLevel, Prisma } from '@prisma/client';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
 import { PrismaService } from '../../prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { SeleniumRunnerService } from './selenium-runner.service';
@@ -8,19 +11,45 @@ import { CitizenInputDto, DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddS
 /** In-memory store for pending citizen input per jobId */
 const citizenInputStore = new Map<string, CitizenInputDto | 'waiting'>();
 
-/** Interaction events (taps/keys/scroll) queued from kiosk → drained by runner */
+/** Interaction events (taps/keys/scroll/fill) queued from kiosk/CMS → drained by runner */
 export interface InteractionEvent {
-  type: 'click' | 'touchStart' | 'touchMove' | 'touchEnd' | 'type' | 'key' | 'scroll' | 'finish';
+  type: 'click' | 'touchStart' | 'touchMove' | 'touchEnd' | 'type' | 'key' | 'scroll' | 'fill' | 'finish';
   x?: number;
   y?: number;
   text?: string;
   key?: string;
   deltaX?: number;
   deltaY?: number;
+  selector?: string;
+  selectorType?: string;
 }
 const interactionStore = new Map<string, InteractionEvent[]>();
 /** Cache deviceSerial per job to avoid a DB hit on every focus report */
 const jobDeviceCache = new Map<string, string>();
+
+/** Upload bridge: token → which job is waiting for a file (phone QR / kiosk capture) */
+interface UploadSession { jobId: string; createdAt: number; uploadField?: string; fileUrl?: string }
+const uploadSessions = new Map<string, UploadSession>();
+
+/** Recorder: captured actions per record-job, surfaced live to the CMS builder */
+export interface RecordedAction {
+  kind: 'open' | 'click' | 'fill' | 'url';
+  selector?: string;
+  selectorType?: string;
+  tag?: string;
+  inputType?: string;
+  isInput?: boolean;
+  isSelect?: boolean;
+  isCheckable?: boolean;
+  text?: string;
+  name?: string;
+  placeholder?: string;
+  href?: string;
+  url?: string;
+  value?: string;
+  at?: number;
+}
+const recordingStore = new Map<string, RecordedAction[]>();
 
 @Injectable()
 export class SeleniumJobService {
@@ -44,6 +73,19 @@ export class SeleniumJobService {
       },
       orderBy: [{ priority: 'desc' }, { scheduledAt: 'asc' }],
       take: filter?.limit ?? 50,
+    });
+  }
+
+  /** Submitted applications on a given kiosk (by device serial) — newest first. */
+  async getSubmissionsByDevice(deviceSerial: string, limit = 50) {
+    return this.prisma.seleniumJob.findMany({
+      where: { submittedDeviceSerial: deviceSerial, status: JobStatus.COMPLETED, applicationCode: { not: null } },
+      select: {
+        id: true, applicationCode: true, completedAt: true,
+        template: { select: { name: true, targetUrl: true } },
+      },
+      orderBy: { completedAt: 'desc' },
+      take: limit,
     });
   }
 
@@ -130,7 +172,16 @@ export class SeleniumJobService {
     if (dto.failReason) data.failReason = dto.failReason;
 
     if (dto.status === JobStatus.RUNNING && !job.startedAt) data.startedAt = now;
-    if (dto.status === JobStatus.COMPLETED) { data.completedAt = now; data.progressPercent = 100; }
+    if (dto.status === JobStatus.COMPLETED) {
+      data.completedAt = now;
+      data.progressPercent = 100;
+      // Persist the submitted application code + kiosk for fast per-device lookup
+      const code = (dto.outputData?.['applicationCode'] as string | undefined)?.trim();
+      if (code) data.applicationCode = code;
+      const input = (job.inputData ?? {}) as Record<string, unknown>;
+      const serial = input['deviceSerial'] as string | undefined;
+      if (serial) data.submittedDeviceSerial = serial;
+    }
     if (dto.status === JobStatus.FAILED) { data.failedAt = now; data.retryCount = { increment: 1 }; }
 
     // Decrement runner load on terminal states
@@ -290,6 +341,112 @@ export class SeleniumJobService {
     return { ok: true };
   }
 
+  // ─── Recorder (admin "inspect to record" template builder) ──────────────────
+
+  /** Start a record session: dispatch a job that opens the URL in record mode. */
+  async startRecording(input: { templateId?: string; url: string }) {
+    let templateId = input.templateId;
+    // Record jobs need a template FK; if none given, pick any template as a host.
+    if (!templateId) {
+      const anyTpl = await this.prisma.workflowTemplate.findFirst({ where: { deletedAt: null }, select: { id: true } });
+      if (!anyTpl) throw new NotFoundException('Chưa có quy trình nào để ghi. Hãy tạo quy trình trước.');
+      templateId = anyTpl.id;
+    }
+    const job = await this.dispatch({
+      templateId,
+      priority: 9,
+      inputData: { recordMode: true, recordUrl: input.url } as Record<string, unknown>,
+    } as DispatchJobDto);
+    recordingStore.set(job.id, []);
+    return { jobId: job.id, status: job.status, runnerAssigned: !!job.runnerId, url: input.url };
+  }
+
+  /** Runner reports one captured action; buffer it and push to the CMS live. */
+  recordAction(id: string, action: RecordedAction) {
+    if (action.kind === 'url') {
+      // URL change — just inform the CMS for the address bar, don't buffer
+      this.realtime.emitToCms('selenium:record_url', { jobId: id, url: action.url });
+      return { ok: true };
+    }
+    const arr = recordingStore.get(id) ?? [];
+    const stamped = { ...action, at: Date.now() };
+    arr.push(stamped);
+    recordingStore.set(id, arr);
+    this.realtime.emitToCms('selenium:recorded', { jobId: id, action: stamped, index: arr.length - 1 });
+    return { ok: true, count: arr.length };
+  }
+
+  getRecording(id: string): RecordedAction[] {
+    return recordingStore.get(id) ?? [];
+  }
+
+  /** Replace ALL steps of a template with the provided ordered list (recorder save). */
+  async replaceSteps(templateId: string, steps: Array<Record<string, unknown>>) {
+    const tpl = await this.prisma.workflowTemplate.findFirst({ where: { deletedAt: null, OR: [{ id: templateId }, { code: templateId }] } });
+    if (!tpl) throw new NotFoundException('Workflow template not found');
+    await this.prisma.workflowStep.deleteMany({ where: { templateId: tpl.id } });
+    if (steps.length) {
+      await this.prisma.workflowStep.createMany({
+        data: steps.map((s, i) => ({
+          templateId: tpl.id,
+          stepOrder: i + 1,
+          stepType: (s.stepType as any) ?? 'CLICK',
+          name: (s.name as string)?.slice(0, 200) || `Bước ${i + 1}`,
+          url: (s.url as string) || null,
+          selector: (s.selector as string) || null,
+          selectorType: (s.selectorType as any) || 'CSS',
+          inputValue: (s.inputValue as string) || null,
+          waitFor: (s.waitFor as string) || null,
+          assertText: (s.assertText as string) || null,
+          uploadField: (s.uploadField as string) || null,
+          onFailure: (s.onFailure as any) || 'STOP',
+          isRequired: s.isRequired === undefined ? true : !!s.isRequired,
+          delayAfterMs: typeof s.delayAfterMs === 'number' ? (s.delayAfterMs as number) : 500,
+        })),
+      });
+    }
+    return this.prisma.workflowStep.findMany({ where: { templateId: tpl.id, deletedAt: null }, orderBy: { stepOrder: 'asc' } });
+  }
+
+  // ─── File upload bridge (kiosk scan / phone QR → runner setInputFiles) ──────
+
+  /** Create a one-time upload session for a job. Returns a short token used by
+   *  the phone QR page and the kiosk camera capture to POST a file. */
+  createUploadSession(jobId: string, uploadField?: string) {
+    const token = crypto.randomBytes(10).toString('hex');
+    uploadSessions.set(token, { jobId, createdAt: Date.now(), uploadField });
+    return { token, jobId };
+  }
+
+  getUploadSession(token: string): UploadSession | null {
+    return uploadSessions.get(token) ?? null;
+  }
+
+  /** Receive a file (from phone or kiosk), persist it, and hand it to the runner
+   *  via the citizen-input channel so it can call setInputFiles(). */
+  async receiveUpload(token: string, buffer: Buffer, originalName: string) {
+    const sess = uploadSessions.get(token);
+    if (!sess) throw new NotFoundException('Phiên tải tệp không tồn tại hoặc đã hết hạn.');
+
+    const dir = path.join(process.cwd(), 'uploads', 'selenium-uploads');
+    fs.mkdirSync(dir, { recursive: true });
+    const safe = (originalName || 'file').replace(/[^\w.\-]/g, '_').slice(-60);
+    const fname = `${token}_${Date.now()}_${safe}`;
+    fs.writeFileSync(path.join(dir, fname), buffer);
+    const fileUrl = `/uploads/selenium-uploads/${fname}`;
+    sess.fileUrl = fileUrl;
+
+    // Hand the file to the runner (it polls citizen-input)
+    await this.submitCitizenInput(sess.jobId, { inputType: 'UPLOAD', value: fileUrl, payload: { fileUrl } });
+
+    // Tell the kiosk the file arrived so it can close the upload overlay
+    const deviceSerial = jobDeviceCache.get(sess.jobId);
+    if (deviceSerial) {
+      this.realtime.sendToDevice(deviceSerial, 'selenium:upload_received', { jobId: sess.jobId, fileUrl });
+    }
+    return { ok: true, fileUrl };
+  }
+
   async cancel(id: string) {
     return this.updateStatus(id, { status: JobStatus.CANCELLED });
   }
@@ -353,13 +510,16 @@ export class SeleniumJobService {
         deviceSerial = inputData['deviceSerial'] as string | undefined;
         if (deviceSerial) jobDeviceCache.set(jobId, deviceSerial);
       }
-      if (deviceSerial && dto.storagePath) {
-        this.realtime.sendToDevice(deviceSerial, 'selenium:screenshot', {
+      if (dto.storagePath) {
+        const payload = {
           jobId,
           screenshotUrl: `/uploads/${dto.storagePath}`,
           stepOrder: dto.stepOrder,
           pageUrl: dto.pageUrl,
-        });
+        };
+        if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:screenshot', payload);
+        // Record sessions have no kiosk device — mirror frames to the CMS builder
+        if (recordingStore.has(jobId)) this.realtime.emitToCms('selenium:screenshot', payload);
       }
     } catch { /* non-critical */ }
 

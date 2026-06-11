@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Delete, Param, Body, Query, HttpCode,
+  Controller, Get, Post, Patch, Put, Delete, Param, Body, Query, HttpCode,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { WorkflowTemplateService } from './workflow-template.service';
@@ -11,6 +11,7 @@ import {
   RegisterRunnerDto, RunnerHeartbeatDto,
   DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddScreenshotDto,
   CitizenInputDto, RequestInputDto, InteractEventDto, ReportFocusDto,
+  StartRecordingDto, RecordActionDto, ReplaceStepsDto,
 } from './selenium.dto';
 
 // ─── Workflow Templates ───────────────────────────────────────────────────────
@@ -18,7 +19,10 @@ import {
 @ApiTags('selenium / workflow-templates')
 @Controller('selenium/templates')
 export class WorkflowTemplateController {
-  constructor(private templates: WorkflowTemplateService) {}
+  constructor(
+    private templates: WorkflowTemplateService,
+    private jobs: SeleniumJobService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'List all workflow templates' })
@@ -63,6 +67,21 @@ export class WorkflowTemplateController {
   @ApiOperation({ summary: 'Delete a template step' })
   removeStep(@Param('stepId') stepId: string) {
     return this.templates.removeStep(stepId);
+  }
+
+  // ─── Recorder ──────────────────────────────────────────────────────────────
+
+  @Post(':id/record')
+  @ApiOperation({ summary: 'Start a record session for this template (opens its target URL)' })
+  async record(@Param('id') id: string, @Body() body: StartRecordingDto) {
+    const tpl = await this.templates.findById(id);
+    return this.jobs.startRecording({ templateId: tpl.id, url: body.url || tpl.targetUrl });
+  }
+
+  @Put(':id/steps')
+  @ApiOperation({ summary: 'Replace ALL steps of a template (recorder save)' })
+  replaceSteps(@Param('id') id: string, @Body() body: ReplaceStepsDto) {
+    return this.jobs.replaceSteps(id, body.steps);
   }
 }
 
@@ -124,6 +143,12 @@ export class SeleniumJobController {
     @Query('limit') limit?: string,
   ) {
     return this.jobs.findAll({ status, runnerId, kioskSessionId, limit: limit ? +limit : undefined });
+  }
+
+  @Get('submissions/:deviceSerial')
+  @ApiOperation({ summary: 'List submitted application codes on a kiosk device' })
+  submissions(@Param('deviceSerial') deviceSerial: string, @Query('limit') limit?: string) {
+    return this.jobs.getSubmissionsByDevice(deviceSerial, limit ? +limit : 50);
   }
 
   @Get(':id')
@@ -217,5 +242,20 @@ export class SeleniumJobController {
   @ApiOperation({ summary: 'Runner: report whether a text input is focused (auto keyboard)' })
   reportFocus(@Param('id') id: string, @Body() body: ReportFocusDto) {
     return this.jobs.reportInputFocus(id, body.focused);
+  }
+
+  // ─── Recorder ──────────────────────────────────────────────────────────────
+
+  @Post(':id/record-action')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Runner: report a captured action during recording' })
+  recordAction(@Param('id') id: string, @Body() body: RecordActionDto) {
+    return this.jobs.recordAction(id, body as any);
+  }
+
+  @Get(':id/recording')
+  @ApiOperation({ summary: 'CMS: fetch the buffered recorded actions for a record job' })
+  recording(@Param('id') id: string) {
+    return this.jobs.getRecording(id);
   }
 }

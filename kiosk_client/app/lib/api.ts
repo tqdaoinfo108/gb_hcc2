@@ -273,6 +273,19 @@ export const seleniumApi = {
     apiRequest<{ queued: number }>(`/selenium/jobs/${jobId}/interact`, {
       method: 'POST', body: JSON.stringify(body),
     }),
+  /** Create an upload session (returns QR + mobile URL) when the portal asks for a file */
+  createUploadSession: (jobId: string, baseUrl?: string) =>
+    apiRequest<{ token: string; mobileUrl: string; qrUrl: string }>(`/selenium/upload/session/${jobId}`, {
+      method: 'POST', body: JSON.stringify({ baseUrl: baseUrl ?? apiUrl }),
+    }),
+  /** Upload a file captured on the kiosk itself */
+  uploadKioskFile: async (token: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${apiUrl}/selenium/upload/${token}`, { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    return res.json() as Promise<{ ok: boolean; fileUrl: string }>;
+  },
 };
 
 // ─── Procedures API ──────────────────────────────────────
@@ -287,6 +300,27 @@ export interface ProcedureData {
   category?: { id: string; name: string } | null;
 }
 
+export interface ProcedureInCategory {
+  id: string;
+  code: string;
+  name: string;
+  nameEn: string | null;
+  slaWorkDays: number;
+  fee: number;
+  feeNote: string | null;
+  agency: string | null;
+  online: boolean;
+}
+export interface CategoryGroup {
+  id: string;
+  code: string;
+  name: string;
+  nameEn: string | null;
+  icon: string | null;
+  colorHex: string | null;
+  procedures: ProcedureInCategory[];
+}
+
 export const proceduresApi = {
   findAll: (params?: { search?: string; categoryId?: string }) => {
     const qs = new URLSearchParams();
@@ -295,6 +329,7 @@ export const proceduresApi = {
     const query = qs.toString() ? `?${qs}` : '';
     return apiRequest<ProcedureData[]>(`/procedures${query}`);
   },
+  grouped: () => apiRequest<CategoryGroup[]>(`/procedures/grouped`),
 };
 
 // ─── Workflow Launch API ──────────────────────────────────

@@ -1563,6 +1563,8 @@ model SeleniumJob {
   priority        Int           @default(5)
   inputData       Json?         // Citizen profile + form data + document refs
   outputData      Json?         // Extracted data, result URLs, confirmation numbers
+  applicationCode String?       // Tracking/application code detected on success
+  submittedDeviceSerial String? // Kiosk that submitted (denormalized for fast lookup)
   currentStepId   String?
   currentStepOrder Int          @default(0)
   progressPercent Int           @default(0)
@@ -1584,6 +1586,8 @@ model SeleniumJob {
   @@index([status, scheduledAt])
   @@index([kioskSessionId])
   @@index([runnerId])
+  @@index([submittedDeviceSerial])
+  @@index([applicationCode])
   @@map("selenium_jobs")
 }
 

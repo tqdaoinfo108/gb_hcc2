@@ -2,6 +2,7 @@
 
 import { useState, useTransition, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { RecorderModal } from "./RecorderModal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
@@ -323,6 +324,7 @@ function TemplateEditor({
   });
   const [metaDirty, setMetaDirty] = useState(false);
   const [editingStep, setEditingStep] = useState<Step | "new" | null>(null);
+  const [recording, setRecording] = useState(false);
 
   const setM = <K extends keyof typeof meta>(k: K, v: (typeof meta)[K]) => {
     setMeta(prev => ({ ...prev, [k]: v })); setMetaDirty(true);
@@ -372,6 +374,14 @@ function TemplateEditor({
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
+            <button
+              onClick={() => setRecording(true)}
+              disabled={pending}
+              title="Mở cổng dịch vụ công trên runner và bấm để tự động ghi lại các bước"
+              className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-40"
+            >
+              <span className="h-2 w-2 rounded-full bg-white" /> Ghi quy trình
+            </button>
             <button
               onClick={togglePublish}
               disabled={pending || (!template.isPublished && !publishable)}
@@ -487,6 +497,15 @@ function TemplateEditor({
           nextOrder={template.steps.length + 1}
           onClose={() => setEditingStep(null)}
           onSaved={() => { setEditingStep(null); run(async () => {}); }}
+        />
+      )}
+
+      {recording && (
+        <RecorderModal
+          templateId={template.id}
+          targetUrl={meta.targetUrl || template.targetUrl}
+          onClose={() => { setRecording(false); run(async () => {}); }}
+          onSaved={() => { setRecording(false); run(async () => {}); }}
         />
       )}
     </div>
