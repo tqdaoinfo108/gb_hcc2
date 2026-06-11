@@ -42,6 +42,11 @@ interface DemoStep {
   interaction?: InteractionType;
 }
 
+// Runner's logical viewport (CSS px). Live frames are captured at 2× this, but
+// touch/click coordinates are always sent in this logical space.
+const RUNNER_VIEW_W = 1366;
+const RUNNER_VIEW_H = 900;
+
 interface FramePoint {
   x: number;
   y: number;
@@ -473,7 +478,9 @@ export function ProcedureSubmitScreen({
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastBlobUrlRef = useRef<string | null>(null);
 
+  // URL-based frame (step screenshots / fallback): preload then swap to avoid flicker.
   const pushFrame = useCallback((url: string) => {
     const sequence = ++frameSequenceRef.current;
     const loader = new Image();
@@ -487,6 +494,21 @@ export function ProcedureSubmitScreen({
       }
     };
     loader.src = url;
+  }, []);
+
+  // Binary live frame over WS → Blob URL, rendered instantly (no network GET).
+  const pushFrameBlob = useCallback((buf: ArrayBuffer) => {
+    const img = imgRef.current;
+    if (!img) return;
+    const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
+    img.src = url;
+    // Revoke the previous frame's URL once the new one is set (avoids leaks).
+    if (lastBlobUrlRef.current) URL.revokeObjectURL(lastBlobUrlRef.current);
+    lastBlobUrlRef.current = url;
+    if (!hasScreenshotRef.current) {
+      hasScreenshotRef.current = true;
+      setHasScreenshot(true);
+    }
   }, []);
 
   // Elapsed time counter
@@ -610,7 +632,16 @@ export function ProcedureSubmitScreen({
         if (timerRef.current) clearTimeout(timerRef.current);
       });
 
-      // Real runner screenshot — live browser view of dichvucong.gov.vn
+      // Live binary frame (primary, low-latency) — JPEG bytes over the WS.
+      socket.on("selenium:frame", (data: { jobId: string; data: ArrayBuffer; pageUrl?: string }) => {
+        if (data.jobId !== currentJobId || !data.data) return;
+        pushFrameBlob(data.data);
+        if (data.pageUrl) {
+          setCurrentUrl(current => current === data.pageUrl ? current : data.pageUrl!);
+        }
+      });
+
+      // Step screenshot (persisted) / fallback — URL-based.
       socket.on("selenium:screenshot", (data: { jobId: string; screenshotUrl: string; pageUrl?: string }) => {
         if (data.jobId !== currentJobId) return;
         const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
@@ -633,8 +664,12 @@ export function ProcedureSubmitScreen({
       });
     });
 
-    return () => { disposed = true; socket?.disconnect(); };
-  }, [currentJobId, deviceSerial, pushFrame]);
+    return () => {
+      disposed = true;
+      socket?.disconnect();
+      if (lastBlobUrlRef.current) { URL.revokeObjectURL(lastBlobUrlRef.current); lastBlobUrlRef.current = null; }
+    };
+  }, [currentJobId, deviceSerial, pushFrame, pushFrameBlob]);
 
   // ── Citizen interaction handlers ───────────────────────────────────────────
   function handleInteractionDone(value?: string) {
@@ -663,7 +698,10 @@ export function ProcedureSubmitScreen({
     const img = imgRef.current;
     if (!img) return null;
     const rect = img.getBoundingClientRect();
-    const natW = img.naturalWidth || 1366, natH = img.naturalHeight || 900;
+    // Map against the runner's LOGICAL viewport (1366×900 CSS px), not the
+    // image's natural pixels — the frame is captured at 2× so naturalWidth is
+    // 2732, but the runner expects clicks in logical coordinates.
+    const natW = RUNNER_VIEW_W, natH = RUNNER_VIEW_H;
     const scale = Math.min(rect.width / natW, rect.height / natH);
     if (!scale) return null;
     const offsetX = (rect.width - natW * scale) / 2;

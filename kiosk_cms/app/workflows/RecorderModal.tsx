@@ -216,6 +216,7 @@ export function RecorderModal({
   const jobIdRef = useRef<string | null>(null);
   const seqRef = useRef(0);
   const varsRef = useRef<CitizenVariable[]>([]);
+  const lastBlobUrlRef = useRef<string | null>(null);
 
   const setStep = (key: string, patch: Partial<RecStep>) =>
     setSteps(prev => prev.map(s => (s.key === key ? { ...s, ...patch } : s)));
@@ -255,6 +256,17 @@ export function RecorderModal({
         const { io } = await import("socket.io-client");
         socket = io(`${WS_URL}/cms`, { transports: ["websocket", "polling"] });
         const s = socket as ReturnType<typeof io>;
+        // Live binary frame (primary) — JPEG bytes over WS → Blob URL, instant.
+        s.on("selenium:frame", (d: { jobId: string; data: ArrayBuffer; pageUrl?: string }) => {
+          if (d.jobId !== jobIdRef.current || !d.data || !imgRef.current) return;
+          const url = URL.createObjectURL(new Blob([d.data], { type: "image/jpeg" }));
+          imgRef.current.src = url;
+          if (lastBlobUrlRef.current) URL.revokeObjectURL(lastBlobUrlRef.current);
+          lastBlobUrlRef.current = url;
+          setHasFrame(true);
+          if (d.pageUrl) setCurrentUrl(d.pageUrl);
+        });
+        // Step screenshot / fallback — URL-based.
         s.on("selenium:screenshot", (d: { jobId: string; screenshotUrl: string; pageUrl?: string }) => {
           if (d.jobId !== jobIdRef.current) return;
           const url = `${API_URL}${d.screenshotUrl}?t=${Date.now()}`;
@@ -312,6 +324,7 @@ export function RecorderModal({
         }).catch(() => {});
       }
       socket?.disconnect();
+      if (lastBlobUrlRef.current) { URL.revokeObjectURL(lastBlobUrlRef.current); lastBlobUrlRef.current = null; }
     };
   }, [templateId, targetUrl]);
 
@@ -322,11 +335,12 @@ export function RecorderModal({
     }).catch(() => {});
   }, []);
 
-  /* Map a click on the live frame to runner viewport coords (1366×900, objectFit:contain) */
+  /* Map a click on the live frame to the runner's LOGICAL viewport (1366×900).
+     Frames are captured at 2× so naturalWidth is 2732 — must use logical dims. */
   function onFrameClick(e: React.MouseEvent<HTMLImageElement>) {
     const img = imgRef.current; if (!img) return;
     const rect = img.getBoundingClientRect();
-    const natW = img.naturalWidth || 1366, natH = img.naturalHeight || 900;
+    const natW = 1366, natH = 900;
     const scale = Math.min(rect.width / natW, rect.height / natH); if (!scale) return;
     const offX = (rect.width - natW * scale) / 2, offY = (rect.height - natH * scale) / 2;
     const x = (e.clientX - rect.left - offX) / scale, y = (e.clientY - rect.top - offY) / scale;

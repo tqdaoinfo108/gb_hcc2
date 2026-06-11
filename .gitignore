@@ -16,3 +16,12 @@ out/
 
 # Per-machine kiosk identity — each physical device has its own copy, never commit
 device.json
+
+# Runtime-generated upload artifacts — screenshots, live frames, scans, PDFs.
+# These are produced by the runner / kiosk at runtime and must never be committed.
+kiosk_api/uploads/selenium/
+kiosk_api/uploads/copy-doc/
+kiosk_api/uploads/pdfs/
+**/uploads/selenium/
+**/uploads/copy-doc/
+**/uploads/pdfs/

@@ -6,7 +6,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../../prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { SeleniumRunnerService } from './selenium-runner.service';
-import { CitizenInputDto, DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddScreenshotDto } from './selenium.dto';
+import { CitizenInputDto, DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddScreenshotDto, LiveFrameDto } from './selenium.dto';
 
 /** In-memory store for pending citizen input per jobId */
 const citizenInputStore = new Map<string, CitizenInputDto | 'waiting'>();
@@ -527,6 +527,20 @@ export class SeleniumJobService {
     } catch { /* non-critical */ }
 
     return shot ?? { jobId, storagePath: dto.storagePath, isLive: true };
+  }
+
+  /**
+   * Relay a live frame to the kiosk (by jobId) and, for record sessions, to the
+   * CMS. The JPEG is sent as BINARY over the WebSocket (socket.io extracts the
+   * Buffer as an attachment), so the client never makes a second HTTP GET.
+   */
+  pushLiveFrame(jobId: string, dto: LiveFrameDto) {
+    let data: Buffer;
+    try { data = Buffer.from(dto.b64, 'base64'); } catch { return { ok: false }; }
+    const payload = { jobId, data, pageUrl: dto.pageUrl, stepOrder: dto.stepOrder };
+    this.realtime.sendToJob(jobId, 'selenium:frame', payload);
+    if (recordingStore.has(jobId)) this.realtime.emitToCms('selenium:frame', payload);
+    return { ok: true, bytes: data.length };
   }
 
   async getJobLogs(jobId: string, limit = 500) {

@@ -11,7 +11,7 @@ import {
   RegisterRunnerDto, RunnerHeartbeatDto,
   DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddScreenshotDto,
   CitizenInputDto, RequestInputDto, InteractEventDto, ReportFocusDto,
-  StartRecordingDto, RecordActionDto, ReplaceStepsDto,
+  StartRecordingDto, RecordActionDto, ReplaceStepsDto, LiveFrameDto,
 } from './selenium.dto';
 
 // ─── Workflow Templates ───────────────────────────────────────────────────────
@@ -189,6 +189,13 @@ export class SeleniumJobController {
   @ApiOperation({ summary: 'Upload screenshot reference for a job (called by runner)' })
   addScreenshot(@Param('id') id: string, @Body() body: AddScreenshotDto) {
     return this.jobs.addScreenshot(id, body);
+  }
+
+  @Post(':id/frame')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Runner: push a live JPEG frame, relayed as binary over WS' })
+  frame(@Param('id') id: string, @Body() body: LiveFrameDto) {
+    return this.jobs.pushLiveFrame(id, body);
   }
 
   @Get(':id/screenshots')

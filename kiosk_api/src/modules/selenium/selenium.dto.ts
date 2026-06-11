@@ -126,6 +126,14 @@ export class ReportFocusDto {
   @ApiProperty() @IsBoolean() focused!: boolean;
 }
 
+export class LiveFrameDto {
+  /** Base64-encoded JPEG bytes of the current page. */
+  @ApiProperty() @IsString() b64!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() pageUrl?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() stepName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsInt() stepOrder?: number;
+}
+
 export class StartRecordingDto {
   @ApiPropertyOptional() @IsOptional() @IsString() templateId?: string;
   @ApiProperty() @IsString() url!: string;

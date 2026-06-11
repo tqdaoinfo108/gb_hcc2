@@ -5,10 +5,15 @@ import { NestFactory } from "@nestjs/core";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import * as path from "path";
+import * as express from "express";
 import { AppModule } from "./app.module";
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Live JPEG frames arrive as base64 JSON — raise the body limit well above the
+  // 100kb express default so 2× screenshots (~0.5–1MB base64) aren't rejected.
+  app.use(express.json({ limit: '8mb' }));
+  app.use(express.urlencoded({ limit: '8mb', extended: true }));
   app.useStaticAssets(path.join(process.cwd(), 'uploads'), { prefix: '/uploads' });
   app.enableCors({
     origin: true,

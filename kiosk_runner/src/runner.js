@@ -25,6 +25,8 @@ const HIDDEN_BROWSER_ARGS = ['--window-position=-32000,-32000', '--window-size=1
 const POLL_MS     = Number(process.env.POLL_MS || 3000);
 const HEARTBEAT_MS = 20000;
 const LIVE_FRAME_INTERVAL_MS = Number(process.env.LIVE_FRAME_INTERVAL_MS || 140);
+// 2× render scale → sharper live frames on large kiosk displays.
+const LIVE_SCALE = Number(process.env.LIVE_SCALE || 2);
 // Screenshots written here so the API can serve them at /uploads/selenium/...
 const SHOT_DIR = process.env.SHOT_DIR
   || path.resolve(__dirname, '../../kiosk_api/uploads/selenium');
@@ -155,6 +157,10 @@ async function runJob(job) {
     context = await browser.newContext({
       locale: 'vi-VN',
       viewport: { width: 1366, height: 900 },
+      // Render at 2× so live frames look crisp when scaled up on the kiosk
+      // display. Layout stays at 1366×900 CSS px, so click/scroll coords from
+      // the kiosk (logical space) are unaffected.
+      deviceScaleFactor: LIVE_SCALE,
       hasTouch: true,
     });
     context.on('page', async (newPage) => {
@@ -452,27 +458,23 @@ async function captureShot(jobId, page, step) {
   }).catch(() => undefined);
 }
 
+// Live frames go straight over the WebSocket as binary JPEG — no disk write,
+// no second HTTP GET from the client. Much lower latency + smoother playback.
+const LIVE_QUALITY = Number(process.env.LIVE_QUALITY || 72);
+
 async function captureLiveFrame(jobId, page, step) {
-  const liveDir = path.join(SHOT_DIR, 'live');
-  fs.mkdirSync(liveDir, { recursive: true });
-  const file = `${jobId}.jpg`;
-  const abs = path.join(liveDir, file);
-  await page.screenshot({
-    path: abs,
-    type: 'jpeg',
-    quality: 65,
-    fullPage: false,
-  });
-  const size = fs.statSync(abs).size;
+  let buf;
+  try {
+    buf = await page.screenshot({ type: 'jpeg', quality: LIVE_QUALITY, fullPage: false });
+  } catch {
+    return; // page may be navigating / closed
+  }
   let pageUrl;
   try { pageUrl = page.url(); } catch { /* page may be closed */ }
-  await api.addScreenshot(jobId, {
-    storagePath: `selenium/live/${file}`,
-    stepOrder: step.stepOrder,
-    stepName: step.name,
-    sizeBytes: size,
+  await api.sendFrame(jobId, buf, {
     pageUrl,
-    isLive: true,
+    stepName: step.name,
+    stepOrder: step.stepOrder,
   }).catch(() => undefined);
 }
 
