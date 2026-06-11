@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useMemo } from "react";
+import { useState, useTransition, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { RecorderModal } from "./RecorderModal";
 
@@ -535,8 +535,13 @@ function StepEditorModal({
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [vars, setVars] = useState<{ key: string; label: string; group: string; example: string; fromCccd: boolean }[]>([]);
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF(prev => ({ ...prev, [k]: v }));
   const hints = useMemo(() => fieldsFor(f.stepType), [f.stepType]);
+
+  useEffect(() => {
+    fetch(`${API_URL}/workflows/variables`).then(r => r.json()).then(setVars).catch(() => {});
+  }, []);
 
   async function save() {
     if (!f.name.trim()) { setErr("Tên bước là bắt buộc."); return; }
@@ -611,9 +616,21 @@ function StepEditorModal({
           )}
 
           {hints.needsInput && (
-            <Field label="Giá trị nhập" hint="Tĩnh hoặc template — vd {{citizen.fullName}}">
-              <input value={f.inputValue} onChange={e => set("inputValue", e.target.value)} placeholder="{{citizen.fullName}}"
+            <Field label="Giá trị nhập" hint="Cố định, hoặc gắn dữ liệu động từ CCCD bằng các nút bên dưới">
+              <input value={f.inputValue} onChange={e => set("inputValue", e.target.value)} placeholder="{{citizen.fullName}} hoặc giá trị cố định"
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none" />
+              {vars.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {vars.map(v => (
+                    <button key={v.key} type="button"
+                      onClick={() => set("inputValue", `{{${v.key}}}`)}
+                      title={`${v.key} → vd: ${v.example}`}
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700">
+                      {v.fromCccd ? "🪪 " : ""}{v.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </Field>
           )}
 

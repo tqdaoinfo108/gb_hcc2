@@ -2,6 +2,7 @@ import { Controller, Get, Post, Param, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { IsString, IsOptional, IsEnum, IsObject } from 'class-validator';
 import { WorkflowLaunchService, LaunchSource } from './workflow-launch.service';
+import { CITIZEN_VARIABLES } from './workflow-variables';
 
 class LaunchDto {
   @IsString() kioskSessionId!: string;
@@ -21,6 +22,13 @@ class LaunchDto {
 @Controller('workflows')
 export class WorkflowLaunchController {
   constructor(private launchSvc: WorkflowLaunchService) {}
+
+  @Get('variables')
+  @ApiOperation({ summary: 'Catalog of dynamic CCCD/citizen variables for the recorder' })
+  variables() {
+    // The recorder uses `match` tokens for auto-binding fields → return as-is.
+    return CITIZEN_VARIABLES;
+  }
 
   @Get('resolve/:procedureId')
   @ApiOperation({ summary: 'Procedure detail + whether online submission is configured' })

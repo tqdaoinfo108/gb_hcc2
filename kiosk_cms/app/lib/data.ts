@@ -229,6 +229,17 @@ export async function getProcedures() {
   });
 }
 
+export async function getProcedureCategories() {
+  return prisma.procedureCategory.findMany({
+    where: { deletedAt: null },
+    include: {
+      parent: { select: { id: true, name: true } },
+      _count: { select: { procedures: { where: { deletedAt: null } } } },
+    },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+  });
+}
+
 /* ── Workflow Builder (Selenium automation) ────────── */
 /* The Selenium/Workflow models live in the API's Prisma schema, not the CMS
  * copy — so we fetch over HTTP from the API instead of via the local client. */

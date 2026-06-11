@@ -43,6 +43,9 @@ export interface RecordedAction {
   isCheckable?: boolean;
   text?: string;
   name?: string;
+  elId?: string;
+  ariaLabel?: string;
+  label?: string;
   placeholder?: string;
   href?: string;
   url?: string;

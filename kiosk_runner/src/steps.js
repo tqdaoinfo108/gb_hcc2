@@ -17,6 +17,82 @@ function resolveTemplate(value, ctx) {
   });
 }
 
+/** Strip Vietnamese diacritics → lowercase, for fuzzy option matching. */
+function stripVi(s) {
+  return (s == null ? '' : String(s))
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/đ/gi, 'd')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Drop the administrative prefix so "Thành phố Hà Nội" matches CCCD's "Hà Nội". */
+function stripAdminPrefix(s) {
+  return stripVi(s)
+    .replace(/^(tinh|thanh pho|tp\.?|quan|huyen|thi xa|thi tran|phuong|xa)\s+/, '')
+    .trim();
+}
+
+/**
+ * Score how well an <option> label matches the target value.
+ * Higher = better; 0 = no match. Tolerates admin prefixes + diacritics so the
+ * CCCD string ("Hà Nội", "Dịch Vọng") lines up with portal labels
+ * ("Thành phố Hà Nội", "Phường Dịch Vọng").
+ */
+function matchScore(optionLabel, target) {
+  const a = stripVi(optionLabel);
+  const b = stripVi(target);
+  if (!a || !b) return 0;
+  if (a === b) return 100;
+  const ap = stripAdminPrefix(optionLabel);
+  const bp = stripAdminPrefix(target);
+  if (ap && ap === bp) return 90;
+  if (ap && bp && (ap.includes(bp) || bp.includes(ap))) return 70;
+  if (a.includes(b) || b.includes(a)) return 50;
+  return 0;
+}
+
+/**
+ * Robustly select a value in a NATIVE <select>, waiting for cascade-loaded
+ * options (province → district → ward AJAX) and matching by normalized label.
+ * @returns true if a selection was made.
+ */
+async function selectNativeOption(loc, target, timeout) {
+  const el = loc.first();
+  const deadline = Date.now() + timeout;
+  // Poll until the select has real options (cascade may still be loading).
+  // The first option is often a "-- Chọn --" placeholder, so require >= 2.
+  let options = [];
+  while (Date.now() < deadline) {
+    options = await el.evaluate((node) => {
+      if (!(node instanceof HTMLSelectElement)) return null;
+      return Array.from(node.options).map((o) => ({ value: o.value, label: o.textContent || '' }));
+    }).catch(() => null);
+    if (options === null) return false; // not a native select
+    const real = options.filter((o) => o.value && o.value !== '0');
+    if (real.length >= 1) break;
+    await el.page().waitForTimeout(300);
+  }
+  if (!options || options.length === 0) return false;
+
+  // Pick the best-scoring option.
+  let best = null;
+  for (const o of options) {
+    const score = matchScore(o.label, target);
+    if (score > 0 && (!best || score > best.score)) best = { ...o, score };
+  }
+  if (!best) return false;
+
+  await el.selectOption({ value: best.value }, { timeout }).catch(async () => {
+    await el.selectOption({ label: best.label.trim() }, { timeout });
+  });
+  // Fire change so dependent cascades (district/ward) repopulate.
+  await el.dispatchEvent('change').catch(() => undefined);
+  return true;
+}
+
 /** Build a Playwright locator from a step's selector + selectorType. */
 function locate(page, step) {
   const sel = step.selector;
@@ -89,14 +165,28 @@ async function executeStep(page, step, ctx, helpers) {
     case 'SELECT': {
       const loc = await tryLocate(page, step);
       const val = resolveTemplate(step.inputValue, ctx);
-      try {
-        await loc.first().selectOption({ label: val }, { timeout });
-      } catch {
-        await loc.first().selectOption(val, { timeout }).catch(async () => {
-          // fall back to clicking an option with matching text
-          await page.getByText(val, { exact: false }).first().click({ timeout });
-        });
+      if (!val) return {};
+
+      // 1) Native <select> — robust, prefix/diacritic-tolerant, cascade-aware.
+      const didNative = await selectNativeOption(loc, val, timeout).catch(() => false);
+      if (didNative) return {};
+
+      // 2) Custom dropdown (div/ul based, common on modern portals): open it,
+      //    then click the option whose normalized text best matches.
+      await loc.first().click({ timeout }).catch(() => undefined);
+      await page.waitForTimeout(400);
+      const target = stripAdminPrefix(val);
+      const opt = page.locator('li, [role="option"], .option, .ant-select-item, .select2-results__option');
+      const count = await opt.count().catch(() => 0);
+      for (let i = 0; i < count; i++) {
+        const text = (await opt.nth(i).textContent().catch(() => '')) || '';
+        if (matchScore(text, val) >= 70 || stripAdminPrefix(text) === target) {
+          await opt.nth(i).click({ timeout }).catch(() => undefined);
+          return {};
+        }
       }
+      // 3) Last resort: plain text click.
+      await page.getByText(val, { exact: false }).first().click({ timeout }).catch(() => undefined);
       return {};
     }
 

@@ -65,6 +65,44 @@ async function captureElementAt(page, x, y) {
         return { sel: path.join(' > '), type: 'CSS' };
       }
 
+      // Resolve the human-visible label for a field, so the recorder can
+      // auto-bind "Tỉnh/Thành phố" → {{citizen.province}} even when the
+      // element's name/id is opaque.
+      function resolveLabel(el) {
+        try {
+          const lblby = el.getAttribute && el.getAttribute('aria-labelledby');
+          if (lblby) {
+            const t = lblby.split(/\s+/).map((id) => {
+              const n = document.getElementById(id);
+              return n ? n.textContent : '';
+            }).join(' ').trim();
+            if (t) return t;
+          }
+          if (el.id) {
+            const lab = document.querySelector(`label[for="${el.id}"]`);
+            if (lab && lab.textContent) return lab.textContent.trim();
+          }
+          let p = el.parentElement;
+          let depth = 0;
+          while (p && depth < 3) {
+            if (p.tagName === 'LABEL' && p.textContent) return p.textContent.trim();
+            depth++;
+            p = p.parentElement;
+          }
+          // Preceding label-ish sibling
+          let sib = el.previousElementSibling;
+          let n = 0;
+          while (sib && n < 2) {
+            if (/LABEL|SPAN|DIV|P/.test(sib.tagName) && sib.textContent && sib.textContent.trim().length <= 40) {
+              return sib.textContent.trim();
+            }
+            sib = sib.previousElementSibling;
+            n++;
+          }
+        } catch { /* ignore */ }
+        return null;
+      }
+
       const el = document.elementFromPoint(x, y);
       if (!el) return null;
       const tag = el.tagName.toLowerCase();
@@ -84,6 +122,9 @@ async function captureElementAt(page, x, y) {
         isCheckable: tag === 'input' && (inputType === 'checkbox' || inputType === 'radio'),
         text: (el.textContent || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 60),
         name: el.getAttribute('name') || null,
+        elId: el.id || null,
+        ariaLabel: el.getAttribute('aria-label') || null,
+        label: resolveLabel(el),
         placeholder: el.getAttribute('placeholder') || null,
         href: el.getAttribute('href') || null,
       };

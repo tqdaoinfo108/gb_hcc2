@@ -97,7 +97,8 @@ export class WorkflowLaunchService {
       if (c) {
         citizenProfile = {
           fullName: c.fullName, nationalId: c.nationalId,
-          dateOfBirth: c.dateOfBirth, phone: c.phone, email: c.email,
+          dateOfBirth: c.dateOfBirth ? c.dateOfBirth.toISOString().slice(0, 10) : undefined,
+          gender: c.gender, phone: c.phone, email: c.email,
           address: c.address, province: c.province, district: c.district, ward: c.ward,
           vneidId: c.vneidId,
         };

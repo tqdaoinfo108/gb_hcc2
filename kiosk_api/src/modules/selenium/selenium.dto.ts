@@ -142,6 +142,9 @@ export class RecordActionDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isCheckable?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() text?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() elId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() ariaLabel?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() label?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() placeholder?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() href?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() url?: string;
