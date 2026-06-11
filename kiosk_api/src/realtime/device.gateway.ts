@@ -28,4 +28,17 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.realtime.emitToCms('device:online', { deviceId: payload.deviceId, timestamp: new Date().toISOString() });
     return { ok: true, deviceId: payload.deviceId };
   }
+
+  /** A kiosk screen subscribes to live updates (frames/progress) for a job. */
+  @SubscribeMessage('subscribe_job')
+  subscribeJob(@ConnectedSocket() socket: Socket, @MessageBody() payload: { jobId: string }) {
+    this.realtime.subscribeJob(socket, payload?.jobId);
+    return { ok: true, jobId: payload?.jobId };
+  }
+
+  @SubscribeMessage('unsubscribe_job')
+  unsubscribeJob(@ConnectedSocket() socket: Socket, @MessageBody() payload: { jobId: string }) {
+    this.realtime.unsubscribeJob(socket, payload?.jobId);
+    return { ok: true };
+  }
 }

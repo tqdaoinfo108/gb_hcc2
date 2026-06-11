@@ -202,20 +202,21 @@ export class SeleniumJobService {
       await this.persistApplication(job, dto.outputData).catch(() => undefined);
     }
 
-    // Push real-time progress to the originating kiosk device
+    // Push real-time progress. Primary route is by jobId (always present on
+    // both sides); deviceSerial is kept as a best-effort secondary route.
     const inputData = (job.inputData ?? {}) as Record<string, unknown>;
     const deviceSerial = inputData['deviceSerial'] as string | undefined;
-    if (deviceSerial) {
-      this.realtime.sendToDevice(deviceSerial, 'selenium:progress', {
-        jobId: job.id,
-        status: dto.status,
-        progressPercent: dto.progressPercent ?? updated.progressPercent,
-        currentStepOrder: dto.currentStepOrder ?? updated.currentStepOrder,
-        citizenMessage: dto.citizenMessage,
-        outputData: dto.status === JobStatus.COMPLETED ? dto.outputData : undefined,
-        failReason: dto.failReason,
-      });
-    }
+    const progressPayload = {
+      jobId: job.id,
+      status: dto.status,
+      progressPercent: dto.progressPercent ?? updated.progressPercent,
+      currentStepOrder: dto.currentStepOrder ?? updated.currentStepOrder,
+      citizenMessage: dto.citizenMessage,
+      outputData: dto.status === JobStatus.COMPLETED ? dto.outputData : undefined,
+      failReason: dto.failReason,
+    };
+    this.realtime.sendToJob(job.id, 'selenium:progress', progressPayload);
+    if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:progress', progressPayload);
     // Also notify CMS
     this.realtime.emitToCms('selenium:job_updated', {
       jobId: job.id,
@@ -274,13 +275,9 @@ export class SeleniumJobService {
     // Register that we're waiting
     citizenInputStore.set(job.id, 'waiting');
 
-    if (deviceSerial) {
-      this.realtime.sendToDevice(deviceSerial, 'selenium:needs_input', {
-        jobId: job.id,
-        inputType,
-        payload,
-      });
-    }
+    const needsInputPayload = { jobId: job.id, inputType, payload };
+    this.realtime.sendToJob(job.id, 'selenium:needs_input', needsInputPayload);
+    if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:needs_input', needsInputPayload);
     return { jobId: job.id, inputType, waiting: true };
   }
 
@@ -337,10 +334,10 @@ export class SeleniumJobService {
   /** Runner reports whether the element focused after a tap is a text input,
    *  so the kiosk can auto-show / hide the on-screen keyboard. */
   reportInputFocus(id: string, focused: boolean) {
+    const payload = { jobId: id, focused };
+    this.realtime.sendToJob(id, 'selenium:input_focus', payload);
     const deviceSerial = jobDeviceCache.get(id);
-    if (deviceSerial) {
-      this.realtime.sendToDevice(deviceSerial, 'selenium:input_focus', { jobId: id, focused });
-    }
+    if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:input_focus', payload);
     return { ok: true };
   }
 
@@ -443,10 +440,10 @@ export class SeleniumJobService {
     await this.submitCitizenInput(sess.jobId, { inputType: 'UPLOAD', value: fileUrl, payload: { fileUrl } });
 
     // Tell the kiosk the file arrived so it can close the upload overlay
+    const uploadPayload = { jobId: sess.jobId, fileUrl };
+    this.realtime.sendToJob(sess.jobId, 'selenium:upload_received', uploadPayload);
     const deviceSerial = jobDeviceCache.get(sess.jobId);
-    if (deviceSerial) {
-      this.realtime.sendToDevice(deviceSerial, 'selenium:upload_received', { jobId: sess.jobId, fileUrl });
-    }
+    if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:upload_received', uploadPayload);
     return { ok: true, fileUrl };
   }
 
@@ -520,6 +517,9 @@ export class SeleniumJobService {
           stepOrder: dto.stepOrder,
           pageUrl: dto.pageUrl,
         };
+        // Primary: deliver by jobId (kiosk subscribes to the job it launched).
+        this.realtime.sendToJob(jobId, 'selenium:screenshot', payload);
+        // Secondary best-effort route by deviceSerial (back-compat).
         if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:screenshot', payload);
         // Record sessions have no kiosk device — mirror frames to the CMS builder
         if (recordingStore.has(jobId)) this.realtime.emitToCms('selenium:screenshot', payload);

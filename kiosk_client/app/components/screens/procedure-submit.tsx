@@ -562,6 +562,10 @@ export function ProcedureSubmitScreen({
       socket = io(`${wsUrl}/device`, { transports: ["websocket", "polling"] });
       socket.on("connect", () => {
         if (deviceSerial) socket.emit("heartbeat", { deviceId: deviceSerial });
+        // Subscribe to THIS job by id — the robust route that does not depend on
+        // deviceSerial being present in the job or matching the heartbeat key.
+        // Re-fires on every reconnect, so frames resume after a socket drop.
+        if (currentJobId) socket.emit("subscribe_job", { jobId: currentJobId });
       });
 
       socket.on("selenium:progress", (data: {

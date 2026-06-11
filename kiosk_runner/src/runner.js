@@ -176,6 +176,16 @@ async function runJob(job) {
       return;
     }
 
+    // Navigate to the target URL up-front and push an early frame, so the kiosk
+    // leaves the "đang kết nối" state as soon as the portal is visible — even
+    // before the first configured step finishes. Skip if step 0 already
+    // navigates (it would double-load the page).
+    const firstNavigates = steps[0] && ['OPEN_URL', 'NAVIGATE'].includes(steps[0].stepType);
+    if (job.template?.targetUrl && !firstNavigates) {
+      await page.goto(job.template.targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => undefined);
+      await captureLiveFrame(job.id, page, { stepOrder: 0, name: 'Đang mở cổng dịch vụ công' }).catch(() => undefined);
+    }
+
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
       const started = Date.now();

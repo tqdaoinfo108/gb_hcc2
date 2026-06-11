@@ -14,6 +14,15 @@ export class RealtimeService {
   private deviceSockets = new Map<string, Set<Socket>>();
   private socketDeviceIds = new Map<string, string>();
 
+  /**
+   * Job-scoped subscriptions. A kiosk screen subscribes to the job it launched
+   * by jobId — the ONE identifier both the runner and the kiosk always hold.
+   * Live frames + progress are delivered by jobId so streaming never depends on
+   * a deviceSerial being present in the job or matching the heartbeat key.
+   */
+  private jobSockets = new Map<string, Set<Socket>>();
+  private socketJobIds = new Map<string, Set<string>>();
+
   bindCms(server: Server) {
     this.cmsServer = server;
   }
@@ -41,7 +50,46 @@ export class RealtimeService {
       if (set && set.size === 0) this.deviceSockets.delete(deviceId);
       this.socketDeviceIds.delete(socket.id);
     }
+    // Also drop any job subscriptions held by this socket.
+    const jobs = this.socketJobIds.get(socket.id);
+    if (jobs) {
+      for (const jobId of jobs) {
+        const js = this.jobSockets.get(jobId);
+        js?.delete(socket);
+        if (js && js.size === 0) this.jobSockets.delete(jobId);
+      }
+      this.socketJobIds.delete(socket.id);
+    }
     return deviceId;
+  }
+
+  /** A kiosk screen subscribes to live updates for a specific job. */
+  subscribeJob(socket: Socket, jobId: string) {
+    if (!jobId) return;
+    let set = this.jobSockets.get(jobId);
+    if (!set) { set = new Set<Socket>(); this.jobSockets.set(jobId, set); }
+    set.add(socket);
+    let jobs = this.socketJobIds.get(socket.id);
+    if (!jobs) { jobs = new Set<string>(); this.socketJobIds.set(socket.id, jobs); }
+    jobs.add(jobId);
+  }
+
+  unsubscribeJob(socket: Socket, jobId: string) {
+    const set = this.jobSockets.get(jobId);
+    set?.delete(socket);
+    if (set && set.size === 0) this.jobSockets.delete(jobId);
+    this.socketJobIds.get(socket.id)?.delete(jobId);
+  }
+
+  /** Emit to every socket subscribed to a job. Returns true if ≥1 reached. */
+  sendToJob(jobId: string, event: string, payload: unknown): boolean {
+    const set = this.jobSockets.get(jobId);
+    if (!set || set.size === 0) return false;
+    let delivered = false;
+    for (const socket of set) {
+      try { socket.emit(event, payload); delivered = true; } catch { /* dead socket */ }
+    }
+    return delivered;
   }
 
   emitToCms(event: string, payload: unknown) {
