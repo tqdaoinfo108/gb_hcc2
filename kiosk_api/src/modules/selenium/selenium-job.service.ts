@@ -26,6 +26,8 @@ export interface InteractionEvent {
 const interactionStore = new Map<string, InteractionEvent[]>();
 /** Cache deviceSerial per job to avoid a DB hit on every focus report */
 const jobDeviceCache = new Map<string, string>();
+/** Latest live JPEG frame per job, kept in memory (served at /…/live.jpg) */
+const liveFrames = new Map<string, Buffer>();
 
 /** Upload bridge: token → which job is waiting for a file (phone QR / kiosk capture) */
 interface UploadSession { jobId: string; createdAt: number; uploadField?: string; fileUrl?: string }
@@ -196,6 +198,11 @@ export class SeleniumJobService {
     }
 
     const updated = await this.prisma.seleniumJob.update({ where: { id: job.id }, data });
+
+    // Free the in-memory live frame once the job reaches a terminal state.
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(dto.status)) {
+      liveFrames.delete(job.id);
+    }
 
     // On success, persist a citizen-facing Application tracking record
     if (dto.status === JobStatus.COMPLETED) {
@@ -530,17 +537,43 @@ export class SeleniumJobService {
   }
 
   /**
-   * Relay a live frame to the kiosk (by jobId) and, for record sessions, to the
-   * CMS. The JPEG is sent as BINARY over the WebSocket (socket.io extracts the
-   * Buffer as an attachment), so the client never makes a second HTTP GET.
+   * Relay a live frame to the kiosk + CMS. We emit BOTH:
+   *  - `selenium:frame` (binary JPEG over WS) — new client, lowest latency.
+   *  - `selenium:screenshot` (URL to the in-memory frame) — universal fallback
+   *    that ANY client build renders (old kiosk bundles listen for this), routed
+   *    by jobId AND deviceSerial so it works regardless of subscription style.
+   * The frame is kept in memory (not on disk) and served at /…/live.jpg.
    */
   pushLiveFrame(jobId: string, dto: LiveFrameDto) {
     let data: Buffer;
     try { data = Buffer.from(dto.b64, 'base64'); } catch { return { ok: false }; }
-    const payload = { jobId, data, pageUrl: dto.pageUrl, stepOrder: dto.stepOrder };
-    this.realtime.sendToJob(jobId, 'selenium:frame', payload);
-    if (recordingStore.has(jobId)) this.realtime.emitToCms('selenium:frame', payload);
+    liveFrames.set(jobId, data);
+
+    const url = `/selenium/jobs/${jobId}/live.jpg`;
+    const framePayload = { jobId, data, pageUrl: dto.pageUrl, stepOrder: dto.stepOrder };
+    const shotPayload = { jobId, screenshotUrl: url, pageUrl: dto.pageUrl, stepOrder: dto.stepOrder };
+
+    // New client (binary) + URL fallback, both by jobId.
+    this.realtime.sendToJob(jobId, 'selenium:frame', framePayload);
+    this.realtime.sendToJob(jobId, 'selenium:screenshot', shotPayload);
+
+    // Old client routes by deviceSerial (heartbeat) and only knows screenshot URLs.
+    const deviceSerial = jobDeviceCache.get(jobId);
+    if (deviceSerial) {
+      this.realtime.sendToDevice(deviceSerial, 'selenium:frame', framePayload);
+      this.realtime.sendToDevice(deviceSerial, 'selenium:screenshot', shotPayload);
+    }
+
+    if (recordingStore.has(jobId)) {
+      this.realtime.emitToCms('selenium:frame', framePayload);
+      this.realtime.emitToCms('selenium:screenshot', shotPayload);
+    }
     return { ok: true, bytes: data.length };
+  }
+
+  /** Latest in-memory live frame for a job (served as image/jpeg). */
+  getLiveFrame(jobId: string): Buffer | undefined {
+    return liveFrames.get(jobId);
   }
 
   async getJobLogs(jobId: string, limit = 500) {

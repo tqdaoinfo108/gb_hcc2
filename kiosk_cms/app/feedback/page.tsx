@@ -1,4 +1,5 @@
 import { getFeedbacks } from "../lib/data";
+import { getScope } from "../lib/session";
 import { EmptyState, PageHeader, Metric, fmt } from "../components";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +15,8 @@ const TARGET_LABELS: Record<string, string> = {
 };
 
 export default async function FeedbackPage() {
-  const { items, avg, scoreDistribution, topTags, satisfactionRate } = await getFeedbacks();
+  const { scopeLocationIds } = await getScope();
+  const { items, avg, scoreDistribution, topTags, satisfactionRate } = await getFeedbacks(scopeLocationIds);
   const maxDistribution = Math.max(1, ...scoreDistribution.map((item) => item.count));
 
   return (

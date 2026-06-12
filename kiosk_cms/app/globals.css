@@ -20,15 +20,38 @@ a { color: inherit; text-decoration: none; }
 
 .sidebar {
   border-right: 1px solid rgb(226 232 240);
-  padding: 24px 16px;
+  padding: 20px 14px;
   background: #fff;
   position: sticky;
   top: 0;
   height: 100dvh;
-  overflow-y: auto;
+  overflow: hidden;            /* inner nav area scrolls instead */
 }
 
 .content { padding: 28px 32px; }
+
+/* ── Refined thin scrollbar (sidebar nav + general) ─────────── */
+.nice-scroll {
+  scrollbar-width: thin;                     /* Firefox */
+  scrollbar-color: rgb(203 213 225) transparent;
+  scrollbar-gutter: stable;
+}
+.nice-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.nice-scroll::-webkit-scrollbar-track { background: transparent; }
+.nice-scroll::-webkit-scrollbar-thumb {
+  background: transparent;                   /* hidden until hover */
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.nice-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgb(203 213 225);
+  background-clip: content-box;
+}
+.nice-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgb(148 163 184);
+  background-clip: content-box;
+}
 
 .nav-link {
   display: flex;

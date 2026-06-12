@@ -5,6 +5,7 @@ import { PaymentMethod, CopyRequestStatus } from '@prisma/client';
 // ─── Category ─────────────────────────────────────────────────────────────────
 
 export class CreateCopyDocCategoryDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() locationId?: string;
   @ApiProperty() @IsString() code!: string;
   @ApiProperty() @IsString() name!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() nameEn?: string;

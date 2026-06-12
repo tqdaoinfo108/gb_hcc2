@@ -53,10 +53,11 @@ export class CopyDocCategoryController {
   constructor(private categories: CopyDocCategoryService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List document categories' })
+  @ApiOperation({ summary: 'List document categories (by location, fallback global)' })
   @ApiQuery({ name: 'includeInactive', required: false, type: Boolean })
-  findAll(@Query('includeInactive') inc?: string) {
-    return this.categories.findAll(inc === 'true');
+  @ApiQuery({ name: 'locationId', required: false })
+  findAll(@Query('includeInactive') inc?: string, @Query('locationId') locationId?: string) {
+    return this.categories.findAll(inc === 'true', locationId);
   }
 
   @Get(':id')

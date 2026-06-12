@@ -1,10 +1,12 @@
 import { getDashboardData } from "./lib/data";
+import { getScope } from "./lib/session";
 import { EmptyState, Metric, PageHeader, StatusBadge, Table, Td, fmt } from "./components";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const { summary, recentApps, recentSessions } = await getDashboardData();
+  const { scopeLocationIds } = await getScope();
+  const { summary, recentApps, recentSessions } = await getDashboardData(scopeLocationIds);
 
   return (
     <div>

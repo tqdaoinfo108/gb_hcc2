@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition, useCallback } from "react";
+import { auditHeaders } from "../lib/audit-headers";
 
 /* ── Types ─────────────────────────────────────────────────────── */
 interface Category {
@@ -37,8 +38,8 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3001";
 
 async function apiFetch(path: string, init?: RequestInit) {
   const res = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers: { "Content-Type": "application/json", ...auditHeaders(), ...(init?.headers ?? {}) },
   });
   if (!res.ok) throw new Error(await res.text());
   if (res.status === 204) return null;

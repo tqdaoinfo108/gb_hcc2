@@ -24,10 +24,11 @@ interface Props {
   onHelp:  () => void;
   sessionId?: string;
   kioskId?: string;
+  locationId?: string;
 }
 
 /* ═══════════════════════════════════════════════════════════════════ */
-export function QueueScreen({ lang, onLangChange, onBack, onHome, onHelp, sessionId, kioskId }: Props) {
+export function QueueScreen({ lang, onLangChange, onBack, onHome, onHelp, sessionId, kioskId, locationId }: Props) {
   const [services,  setServices]  = useState<QueueServiceData[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [issuing,   setIssuing]   = useState(false);
@@ -38,11 +39,11 @@ export function QueueScreen({ lang, onLangChange, onBack, onHome, onHelp, sessio
 
   /* ── Load services on mount ─────────────────────────────── */
   useEffect(() => {
-    queueApi.getServices()
+    queueApi.getServices(locationId)
       .then(setServices)
       .catch(err => console.error("Failed to load queue services:", err))
       .finally(() => setLoading(false));
-  }, []);
+  }, [locationId]);
 
   /* ── Socket.io for real-time queue updates ──────────────── */
   useEffect(() => {

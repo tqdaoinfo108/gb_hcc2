@@ -15,14 +15,22 @@ export class QueueService {
   // READ
   // ──────────────────────────────────────────────────
 
-  async getServices() {
+  async getServices(locationId?: string) {
+    const include = {
+      counters: { where: { deletedAt: null }, orderBy: { number: 'asc' as const } },
+      _count: { select: { tickets: { where: { status: TicketStatus.WAITING, deletedAt: null } } } },
+    };
+    // Location-specific services, falling back to the global set (locationId null).
+    if (locationId) {
+      const own = await this.prisma.queueService.findMany({
+        where: { deletedAt: null, isActive: true, locationId },
+        include, orderBy: { name: 'asc' },
+      });
+      if (own.length) return own;
+    }
     return this.prisma.queueService.findMany({
-      where: { deletedAt: null, isActive: true },
-      include: {
-        counters: { where: { deletedAt: null }, orderBy: { number: 'asc' } },
-        _count: { select: { tickets: { where: { status: TicketStatus.WAITING, deletedAt: null } } } },
-      },
-      orderBy: { name: 'asc' },
+      where: { deletedAt: null, isActive: true, locationId: null },
+      include, orderBy: { name: 'asc' },
     });
   }
 
@@ -191,9 +199,10 @@ export class QueueService {
     description?: string;
     colorHex?: string;
     prefix?: string;
+    locationId?: string | null;
   }) {
     try {
-      return await this.prisma.queueService.create({ data: dto });
+      return await this.prisma.queueService.create({ data: { ...dto, locationId: dto.locationId ?? null } });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
         throw new ConflictException(`Mã dịch vụ "${dto.code}" đã tồn tại`);
@@ -262,8 +271,9 @@ export class QueueService {
   // SEED (idempotent)
   // ──────────────────────────────────────────────────
 
-  async seedServices() {
-    const existing = await this.prisma.queueService.count({ where: { deletedAt: null } });
+  async seedServices(locationId?: string | null) {
+    const loc = locationId ?? null;
+    const existing = await this.prisma.queueService.count({ where: { deletedAt: null, locationId: loc } });
     if (existing > 0) {
       return { seeded: false, message: 'Queue services already exist', count: existing };
     }
@@ -293,7 +303,7 @@ export class QueueService {
 
     let created = 0;
     for (const svc of DEFAULTS) {
-      const service = await this.prisma.queueService.create({ data: svc });
+      const service = await this.prisma.queueService.create({ data: { ...svc, locationId: loc } });
       await this.prisma.counter.createMany({
         data: [
           { serviceId: service.id, number: '01', name: 'Quầy 1', status: CounterStatus.OPEN  },

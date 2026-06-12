@@ -2,29 +2,35 @@ import { prisma } from "./prisma";
 import { ApplicationStatus, KioskDeviceStatus, SessionStatus } from "@prisma/client";
 
 /* ── Dashboard ─────────────────────────────────────── */
-export async function getDashboardData() {
+export async function getDashboardData(scope: string[] | null = null) {
+  // device-rooted filter (KioskDevice) and session-rooted filter (→ device → location)
+  const devW = scope === null ? {} : { locationId: { in: scope } };
+  const sessW = scope === null ? {} : { device: { locationId: { in: scope } } };
+  const appW = scope === null ? {} : { session: { device: { locationId: { in: scope } } } };
+  const ticketW = scope === null ? {} : { device: { locationId: { in: scope } } };
+
   const [
     totalDevices, onlineDevices, totalSessions, activeSessions,
     totalApps, submittedApps, completedApps, avgFeedback,
     totalTickets, recentApps, recentSessions,
   ] = await Promise.all([
-    prisma.kioskDevice.count({ where: { deletedAt: null } }),
-    prisma.kioskDevice.count({ where: { deletedAt: null, status: KioskDeviceStatus.ONLINE } }),
-    prisma.kioskSession.count({ where: { deletedAt: null } }),
-    prisma.kioskSession.count({ where: { deletedAt: null, status: SessionStatus.ACTIVE } }),
-    prisma.application.count({ where: { deletedAt: null } }),
-    prisma.application.count({ where: { deletedAt: null, status: ApplicationStatus.SUBMITTED } }),
-    prisma.application.count({ where: { deletedAt: null, status: ApplicationStatus.COMPLETED } }),
-    prisma.feedback.aggregate({ _avg: { score: true }, where: { deletedAt: null } }),
-    prisma.queueTicket.count({ where: { deletedAt: null } }),
+    prisma.kioskDevice.count({ where: { deletedAt: null, ...devW } }),
+    prisma.kioskDevice.count({ where: { deletedAt: null, status: KioskDeviceStatus.ONLINE, ...devW } }),
+    prisma.kioskSession.count({ where: { deletedAt: null, ...sessW } }),
+    prisma.kioskSession.count({ where: { deletedAt: null, status: SessionStatus.ACTIVE, ...sessW } }),
+    prisma.application.count({ where: { deletedAt: null, ...appW } }),
+    prisma.application.count({ where: { deletedAt: null, status: ApplicationStatus.SUBMITTED, ...appW } }),
+    prisma.application.count({ where: { deletedAt: null, status: ApplicationStatus.COMPLETED, ...appW } }),
+    prisma.feedback.aggregate({ _avg: { score: true }, where: { deletedAt: null, ...appW } }),
+    prisma.queueTicket.count({ where: { deletedAt: null, ...ticketW } }),
     prisma.application.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, ...appW },
       orderBy: { createdAt: "desc" },
       take: 8,
       include: { citizen: true, procedure: { include: { category: true } } },
     }),
     prisma.kioskSession.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, ...sessW },
       orderBy: { startTime: "desc" },
       take: 6,
       include: { device: { include: { location: true } } },
@@ -44,10 +50,17 @@ export async function getDashboardData() {
   };
 }
 
+/* ── Location scope helper ─────────────────────────── */
+/** Build a Prisma `where` fragment that restricts by location.
+ *  `scope === null` → no restriction (super admin, all locations). */
+export function locFilter(scope: string[] | null, field = "locationId") {
+  return scope === null ? {} : { [field]: { in: scope } };
+}
+
 /* ── Devices ───────────────────────────────────────── */
-export async function getDevices() {
+export async function getDevices(scope: string[] | null = null) {
   const devices = await prisma.kioskDevice.findMany({
-    where: { deletedAt: null },
+    where: { deletedAt: null, ...locFilter(scope) },
     include: {
       location: true,
       components: { where: { deletedAt: null } },
@@ -76,18 +89,18 @@ export async function getDeviceById(id: string) {
   return device ? { ...device, effectiveStatus: getEffectiveDeviceStatus(device) } : null;
 }
 
-export async function getKioskLocations() {
+export async function getKioskLocations(scope: string[] | null = null) {
   return prisma.kioskLocation.findMany({
-    where: { deletedAt: null },
+    where: { deletedAt: null, ...(scope === null ? {} : { id: { in: scope } }) },
     include: { _count: { select: { devices: { where: { deletedAt: null } } } } },
     orderBy: [{ province: "asc" }, { district: "asc" }, { name: "asc" }],
   });
 }
 
 /* ── Copy-Doc ──────────────────────────────────────── */
-export async function getCopyDocCategories() {
+export async function getCopyDocCategories(locationId: string | null = null) {
   return prisma.copyDocCategory.findMany({
-    where: { deletedAt: null },
+    where: { deletedAt: null, locationId: locationId ?? null },
     include: {
       feeRules: { where: { isActive: true }, orderBy: { minQuantity: "asc" } },
       _count: { select: { requests: true } },
@@ -106,11 +119,23 @@ export async function getCopyDocCategoryById(id: string) {
   });
 }
 
-export async function getCopyDocRequests(status?: string, take = 50) {
+/** Resolve device ids belonging to the given location scope (null = all). */
+async function deviceIdsForScope(scope: string[] | null): Promise<string[] | null> {
+  if (scope === null) return null;
+  const devices = await prisma.kioskDevice.findMany({
+    where: { deletedAt: null, locationId: { in: scope } },
+    select: { id: true },
+  });
+  return devices.map((d) => d.id);
+}
+
+export async function getCopyDocRequests(status?: string, take = 50, scope: string[] | null = null) {
+  const deviceIds = await deviceIdsForScope(scope);
   return prisma.copyDocRequest.findMany({
     where: {
       deletedAt: null,
       ...(status ? { status: status as never } : {}),
+      ...(deviceIds === null ? {} : { kioskDeviceId: { in: deviceIds } }),
     },
     orderBy: { createdAt: "desc" },
     take,
@@ -123,12 +148,14 @@ export async function getCopyDocRequests(status?: string, take = 50) {
   });
 }
 
-export async function getCopyDocStats() {
+export async function getCopyDocStats(scope: string[] | null = null) {
+  const deviceIds = await deviceIdsForScope(scope);
+  const locW = deviceIds === null ? {} : { kioskDeviceId: { in: deviceIds } };
   const [total, pending, completed, failed] = await Promise.all([
-    prisma.copyDocRequest.count({ where: { deletedAt: null } }),
-    prisma.copyDocRequest.count({ where: { deletedAt: null, status: { in: ["INITIATED","SCAN_PENDING","AI_PROCESSING","PREVIEW_READY","FEE_PENDING","GENERATING_PDF","PRINT_QUEUED","PRINTING"] as never[] } } }),
-    prisma.copyDocRequest.count({ where: { deletedAt: null, status: "COMPLETED" as never } }),
-    prisma.copyDocRequest.count({ where: { deletedAt: null, status: "FAILED" as never } }),
+    prisma.copyDocRequest.count({ where: { deletedAt: null, ...locW } }),
+    prisma.copyDocRequest.count({ where: { deletedAt: null, ...locW, status: { in: ["INITIATED","SCAN_PENDING","AI_PROCESSING","PREVIEW_READY","FEE_PENDING","GENERATING_PDF","PRINT_QUEUED","PRINTING"] as never[] } } }),
+    prisma.copyDocRequest.count({ where: { deletedAt: null, ...locW, status: "COMPLETED" as never } }),
+    prisma.copyDocRequest.count({ where: { deletedAt: null, ...locW, status: "FAILED" as never } }),
   ]);
   return { total, pending, completed, failed };
 }
@@ -154,18 +181,20 @@ export async function getApplications(status?: ApplicationStatus) {
 }
 
 /* ── Home Services ─────────────────────────────────── */
-export async function getHomeServices() {
+/** locationId null = global default set; a location id = that location's override set. */
+export async function getHomeServices(locationId: string | null = null) {
   return prisma.kioskHomeService.findMany({
-    where: { deletedAt: null },
+    where: { deletedAt: null, locationId: locationId ?? null },
     orderBy: { sortOrder: "asc" },
   });
 }
 
 /* ── Queue ─────────────────────────────────────────── */
-export async function getQueueOverview() {
+/** locationId null = global default set; a location id = that location's set. */
+export async function getQueueOverview(locationId: string | null = null) {
   const [services, waiting, serving, completed] = await Promise.all([
     prisma.queueService.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, locationId: locationId ?? null },
       orderBy: { name: "asc" },
       include: {
         counters: {
@@ -309,10 +338,12 @@ export async function getAIConversations() {
 }
 
 /* ── Feedback ──────────────────────────────────────── */
-export async function getFeedbacks() {
+export async function getFeedbacks(scope: string[] | null = null) {
+  // Feedback → session → device → location
+  const locWhere = scope === null ? {} : { session: { device: { locationId: { in: scope } } } };
   const [items, avg] = await Promise.all([
     prisma.feedback.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, ...locWhere },
       orderBy: { createdAt: "desc" },
       take: 100,
       include: {
@@ -331,7 +362,7 @@ export async function getFeedbacks() {
     prisma.feedback.aggregate({
       _avg: { score: true, starRating: true },
       _count: { id: true },
-      where: { deletedAt: null },
+      where: { deletedAt: null, ...locWhere },
     }),
   ]);
 

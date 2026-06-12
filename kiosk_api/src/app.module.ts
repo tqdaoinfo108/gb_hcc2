@@ -3,7 +3,9 @@ import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PrismaService } from './prisma.service';
 import { PrismaModule } from './common/prisma.module';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AuditService } from './audit/audit.service';
+import { AuditInterceptor } from './audit/audit.interceptor';
 import { HealthController } from './health.controller';
 import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
@@ -61,6 +63,7 @@ import { CopyDocModule } from './modules/copy-doc/copy-doc.module';
     RedisService,
     AuditService,
     AuthService,
+    { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
   ],
 })
 export class AppModule {}

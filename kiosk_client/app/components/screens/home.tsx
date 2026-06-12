@@ -11,6 +11,7 @@ interface Props {
   onSelect: (id: ServiceId) => void;
   onHelp: () => void;
   onHome: () => void;
+  locationId?: string;
 }
 
 /* Build a lookup from static SERVICE_CARDS for fallback label/sub */
@@ -21,15 +22,15 @@ function resolveColor(val: string | null | undefined, fallback: string): string 
   return val ?? fallback;
 }
 
-export function HomeScreen({ lang, onLangChange, onSelect, onHelp, onHome }: Props) {
+export function HomeScreen({ lang, onLangChange, onSelect, onHelp, onHome, locationId }: Props) {
   const [hov, setHov] = useState<string | null>(null);
   const [services, setServices] = useState<HomeServiceData[] | null>(null);
 
   useEffect(() => {
-    homeServicesApi.getVisible()
+    homeServicesApi.getVisible(locationId)
       .then(data => setServices(data))
       .catch(() => setServices(null)); // fall back to static cards on error
-  }, []);
+  }, [locationId]);
 
   /* If API has returned data use it; otherwise fall back to hardcoded SERVICE_CARDS */
   const cards: Array<{

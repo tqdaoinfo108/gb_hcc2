@@ -1,10 +1,12 @@
 import { getDevices } from "../lib/data";
+import { getScope } from "../lib/session";
 import { EmptyState, PageHeader, StatusBadge, Table, Td, fmt } from "../components";
 
 export const dynamic = "force-dynamic";
 
 export default async function DevicesPage() {
-  const devices = await getDevices();
+  const { scopeLocationIds } = await getScope();
+  const devices = await getDevices(scopeLocationIds);
 
   return (
     <div>

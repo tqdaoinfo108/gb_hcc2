@@ -23,12 +23,14 @@ export async function createCategory(formData: FormData) {
   const pdfTemplateName = (formData.get("pdfTemplateName") as string | null)?.trim() || null;
   const sortOrder      = parseInt(formData.get("sortOrder") as string) || 0;
 
+  const locationId     = (formData.get("locationId") as string | null)?.trim() || null;
+
   const ocrKeywords = ocrKeywordsRaw.split(",").map(s => s.trim()).filter(Boolean);
   const ocrDocTypes = ocrDocTypesRaw.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
 
   await prisma.copyDocCategory.create({
     data: {
-      code, name, nameEn, description, icon, colorHex,
+      locationId, code, name, nameEn, description, icon, colorHex,
       pricePerCopy, processingFeeRate, maxCopiesPerRequest,
       legalBasis, validityDays, requiresStamp,
       ocrKeywords, ocrDocTypes, ocrMinScore, pdfTemplateName,

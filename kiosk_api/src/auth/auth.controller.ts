@@ -1,14 +1,15 @@
-import { Body, Controller, Post } from "@nestjs/common";
-import { ApiTags } from "@nestjs/swagger";
-import { IsEmail, IsString, MinLength } from "class-validator";
+import { Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
+import { IsString, MinLength } from "class-validator";
 import { AuthService } from "./auth.service";
+import { JwtAuthGuard } from "./jwt-auth.guard";
 
 class LoginDto {
-  @IsEmail()
+  @IsString()
   email!: string;
 
   @IsString()
-  @MinLength(8)
+  @MinLength(6)
   password!: string;
 }
 
@@ -18,7 +19,16 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post("login")
+  @ApiOperation({ summary: "Đăng nhập CMS (email + mật khẩu)" })
   login(@Body() dto: LoginDto) {
-    return this.auth.login(dto.email, dto.password);
+    return this.auth.login(dto.email.trim(), dto.password);
+  }
+
+  @Get("me")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Thông tin người dùng hiện tại (xác thực token)" })
+  me(@Req() req: any) {
+    return this.auth.me(req.user.sub);
   }
 }

@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { auditHeaders } from "../lib/audit-headers";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
@@ -23,24 +24,26 @@ interface HomeService {
 async function apiPatch(id: string, payload: Partial<HomeService>) {
   const res = await fetch(`${API_URL}/kiosk/home-services/${id}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auditHeaders() },
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(`PATCH ${id} → ${res.status}`);
   return res.json();
 }
 
-async function apiSeed() {
-  const res = await fetch(`${API_URL}/kiosk/home-services/seed`, {
+async function apiSeed(locationId: string | null) {
+  const q = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
+  const res = await fetch(`${API_URL}/kiosk/home-services/seed${q}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auditHeaders() },
   });
   if (!res.ok) throw new Error(`Seed → ${res.status}`);
   return res.json();
 }
 
-async function fetchAll(): Promise<HomeService[]> {
-  const res = await fetch(`${API_URL}/kiosk/home-services/all`);
+async function fetchAll(locationId: string | null): Promise<HomeService[]> {
+  const q = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
+  const res = await fetch(`${API_URL}/kiosk/home-services/all${q}`);
   if (!res.ok) throw new Error(`GET all → ${res.status}`);
   return res.json();
 }
@@ -56,7 +59,7 @@ const SCREEN_OPTIONS = [
 ];
 
 /* ═══════════════════════════════════════════════════════ */
-export function HomeServicesClient({ initialServices }: { initialServices: HomeService[] }) {
+export function HomeServicesClient({ initialServices, locationId = null }: { initialServices: HomeService[]; locationId?: string | null }) {
   const [services, setServices] = useState<HomeService[]>(initialServices);
   const [busy,    setBusy]    = useState<string | null>(null);
   const [editing, setEditing] = useState<HomeService | null>(null);
@@ -69,7 +72,7 @@ export function HomeServicesClient({ initialServices }: { initialServices: HomeS
 
   async function refresh() {
     try {
-      const data = await fetchAll();
+      const data = await fetchAll(locationId);
       setServices(data);
     } catch (err) {
       console.error(err);
@@ -117,7 +120,7 @@ export function HomeServicesClient({ initialServices }: { initialServices: HomeS
   async function handleSeed() {
     setBusy("seed");
     try {
-      const res = await apiSeed();
+      const res = await apiSeed(locationId);
       showToast(res.seeded ? `Đã tạo ${res.count} dịch vụ mặc định` : "Dịch vụ đã tồn tại");
       await refresh();
     } catch {

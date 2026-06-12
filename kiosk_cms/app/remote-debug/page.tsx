@@ -1,11 +1,16 @@
 import { prisma } from "../lib/prisma";
+import { getScope } from "../lib/session";
 import { EmptyState, PageHeader, Table, Td, StatusBadge, fmt } from "../components";
 
 export const dynamic = "force-dynamic";
 
 export default async function SessionsPage() {
+  const { scopeLocationIds } = await getScope();
   const sessions = await prisma.kioskSession.findMany({
-    where: { deletedAt: null },
+    where: {
+      deletedAt: null,
+      ...(scopeLocationIds === null ? {} : { device: { locationId: { in: scopeLocationIds } } }),
+    },
     orderBy: { startTime: "desc" },
     take: 40,
     include: {

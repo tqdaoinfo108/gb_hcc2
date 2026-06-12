@@ -174,14 +174,14 @@ async function runJob(job) {
       deviceScaleFactor: LIVE_SCALE,
       hasTouch: true,
     });
+    // Only do per-page SETUP here. Do NOT reassign `page` or move the live
+    // stream to popups from this event — the run/record/interactive loops own
+    // page selection. Otherwise a popup (e.g. the VNeID SSO window) would hijack
+    // the stream to a blank page while the loop keeps driving the portal,
+    // leaving the recorder frozen/white.
     context.on('page', async (newPage) => {
       await moveBrowserWindowOffscreen(newPage);
       attachFileChooser(newPage, job.id);
-      if (newPage !== page) {
-        page = newPage;
-        await newPage.bringToFront().catch(() => undefined);
-        await streamer.attach(newPage).catch(() => undefined); // stream the new tab
-      }
     });
     page = await context.newPage();
     await moveBrowserWindowOffscreen(page);
@@ -395,11 +395,22 @@ async function completeJob(jobId, outputData) {
 }
 
 /* ── Record mode (admin builds a template by clicking the live portal) ───── */
+/** Race a promise against a timeout so a navigating click can't stall the loop. */
+function withTimeout(promise, ms) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, ms)),
+  ]);
+}
+
 async function applyRecordEvent(page, jobId, ev) {
   if (ev.type === 'click') {
     if (typeof ev.x !== 'number' || typeof ev.y !== 'number') return;
-    const info = await captureElementAt(page, ev.x, ev.y).catch(() => null);
-    await page.mouse.click(ev.x, ev.y).catch(() => undefined);
+    // Capture the selector BEFORE the click (the click may navigate the page).
+    const info = await withTimeout(captureElementAt(page, ev.x, ev.y), 3000);
+    // Don't await the click open-ended — a click that triggers navigation or a
+    // popup must never block the record loop (which would freeze the recorder).
+    await withTimeout(page.mouse.click(ev.x, ev.y), 3000);
     if (info && info.selector) {
       await api.recordAction(jobId, { kind: 'click', ...info }).catch(() => undefined);
     }
@@ -436,11 +447,23 @@ async function recordLoop(jobId, page, targetUrl, streamer) {
 
   const deadline = Date.now() + INTERACTIVE_MAX_MS;
   let finished = false, lastShot = Date.now(), lastActivity = Date.now(), lastStatusCheck = Date.now();
+  let pageCount = page.context().pages().length;
 
   while (!finished && !shuttingDown && Date.now() < deadline) {
-    const pages = page.context().pages().filter((p) => !p.isClosed());
-    const latest = pages[pages.length - 1];
-    if (latest && latest !== page) { page = latest; await moveBrowserWindowOffscreen(page); await page.bringToFront().catch(() => undefined); if (streamer) await streamer.attach(page).catch(() => undefined); }
+    // Stay on the page the admin is recording. Do NOT auto-follow popups — a
+    // VNeID/SSO popup must not hijack recording (it would show a blank frame and
+    // capture useless selectors). Only switch if the current page was closed.
+    if (page.isClosed()) {
+      const open = page.context().pages().filter((p) => !p.isClosed());
+      const next = open[open.length - 1];
+      if (next) { page = next; await moveBrowserWindowOffscreen(page); await page.bringToFront().catch(() => undefined); if (streamer) await streamer.attach(page).catch(() => undefined); }
+    } else {
+      // A popup just opened (e.g. VNeID) — reclaim foreground for the recorded
+      // page so its screencast keeps emitting, then ignore the popup.
+      const n = page.context().pages().length;
+      if (n > pageCount) { await page.bringToFront().catch(() => undefined); }
+      pageCount = n;
+    }
 
     let events = [];
     try { events = await api.drainInteractions(jobId); } catch { events = []; }

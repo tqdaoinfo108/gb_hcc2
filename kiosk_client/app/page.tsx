@@ -284,7 +284,7 @@ export default function KioskRoot() {
                 </div>
               </div>
             )}
-            {screen === "home" && <HomeScreen {...common} onSelect={onServiceSelect} />}
+            {screen === "home" && <HomeScreen {...common} onSelect={onServiceSelect} locationId={deviceConfig?.locationId} />}
             {screen === "auth" && <AuthScreen {...common} onBack={goHome} onDone={() => setScreen("profile")} />}
             {screen === "profile" && <ProfileScreen {...common} onBack={() => setScreen("auth")} onContinue={() => setScreen("discovery")} />}
             {screen === "discovery" && (
@@ -318,7 +318,7 @@ export default function KioskRoot() {
               />
             )}
             {screen === "queue" && (
-              <QueueScreen {...common} onBack={goHome} sessionId={session?.id} kioskId={deviceConfig.id} />
+              <QueueScreen {...common} onBack={goHome} sessionId={session?.id} kioskId={deviceConfig.id} locationId={deviceConfig.locationId} />
             )}
             {screen === "feedback" && session && (
               <FeedbackScreen {...common} sessionId={session.id} onComplete={goIdle} />

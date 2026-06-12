@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getCopyDocCategories, getCopyDocStats } from "../lib/data";
+import { getScope } from "../lib/session";
 import { EmptyState, Metric, PageHeader, Table, Td, fmt } from "../components";
 
 export const dynamic = "force-dynamic";
@@ -23,9 +24,12 @@ const STATUS_VI: Record<string, string> = {
 };
 
 export default async function CopyDocOverviewPage() {
+  const { scopeLocationIds, selectedLocationId, availableLocations, isSuperAdmin } = await getScope();
+  const effectiveLoc =
+    selectedLocationId ?? (!isSuperAdmin && availableLocations.length === 1 ? availableLocations[0].id : null);
   const [categories, stats] = await Promise.all([
-    getCopyDocCategories(),
-    getCopyDocStats(),
+    getCopyDocCategories(effectiveLoc),
+    getCopyDocStats(scopeLocationIds),
   ]);
 
   return (

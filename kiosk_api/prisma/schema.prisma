@@ -29,7 +29,11 @@ model KioskLocation {
   updatedAt  DateTime  @updatedAt
   deletedAt  DateTime?
 
-  devices    KioskDevice[]
+  devices          KioskDevice[]
+  userLocations    UserLocation[]
+  homeServices     KioskHomeService[]
+  queueServices    QueueService[]
+  copyDocCategories CopyDocCategory[]
 
   @@map("kiosk_locations")
 }
@@ -680,7 +684,9 @@ model SubmissionReceipt {
 
 model KioskHomeService {
   id          String    @id @default(uuid())
-  code        String    @unique
+  /// null = mặc định chung (áp cho mọi địa điểm chưa cấu hình riêng).
+  locationId  String?
+  code        String
   name        String
   nameEn      String?
   description String?
@@ -695,6 +701,10 @@ model KioskHomeService {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
+  location KioskLocation? @relation(fields: [locationId], references: [id])
+
+  @@unique([locationId, code])
+  @@index([locationId])
   @@map("kiosk_home_services")
 }
 
@@ -704,7 +714,8 @@ model KioskHomeService {
 
 model QueueService {
   id            String    @id @default(uuid())
-  code          String    @unique
+  locationId    String?   // null = dùng chung cho mọi địa điểm
+  code          String
   name          String
   nameEn        String?
   description   String?
@@ -716,10 +727,13 @@ model QueueService {
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?
 
+  location    KioskLocation?        @relation(fields: [locationId], references: [id])
   counters    Counter[]
   tickets     QueueTicket[]
   dailyStats  QueueDailyStatistic[]
 
+  @@unique([locationId, code])
+  @@index([locationId])
   @@map("queue_services")
 }
 
@@ -1023,12 +1037,46 @@ model AdminUser {
   updatedAt         DateTime  @updatedAt
   deletedAt         DateTime?
 
-  organization Organization?  @relation(fields: [organizationId], references: [id])
-  userRoles    UserRole[]
-  auditLogs    AdminAuditLog[]
+  organization  Organization?  @relation(fields: [organizationId], references: [id])
+  userRoles     UserRole[]
+  userLocations UserLocation[]
+  moduleAccess  UserModuleAccess[]
+  auditLogs     AdminAuditLog[]
 
   @@index([organizationId])
   @@map("admin_users")
+}
+
+/// Per-user access to a CMS module/service (show-hide + manage).
+/// Super admins implicitly have access to everything (no rows needed).
+model UserModuleAccess {
+  id        String   @id @default(uuid())
+  userId    String
+  module    String   // e.g. "devices", "queue", "copydoc", "feedback", "users"
+  canManage Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user AdminUser @relation(fields: [userId], references: [id])
+
+  @@unique([userId, module])
+  @@index([userId])
+  @@map("user_module_access")
+}
+
+/// Which kiosk locations a (non-super) admin user manages. Super admins
+/// (isSuperAdmin) implicitly manage every location.
+model UserLocation {
+  id         String   @id @default(uuid())
+  userId     String
+  locationId String
+  createdAt  DateTime @default(now())
+
+  user     AdminUser     @relation(fields: [userId], references: [id])
+  location KioskLocation @relation(fields: [locationId], references: [id])
+
+  @@unique([userId, locationId])
+  @@index([locationId])
+  @@map("user_locations")
 }
 
 model Role {
@@ -1095,9 +1143,14 @@ model RolePermission {
 
 model AdminAuditLog {
   id         String   @id @default(uuid())
-  adminId    String
+  adminId    String?
+  actorName  String?
+  locationId String?
   action     String
   module     String
+  method     String?
+  path       String?
+  statusCode Int?
   targetId   String?
   targetType String?
   before     Json?
@@ -1106,10 +1159,11 @@ model AdminAuditLog {
   userAgent  String?
   createdAt  DateTime @default(now())
 
-  admin AdminUser @relation(fields: [adminId], references: [id])
+  admin AdminUser? @relation(fields: [adminId], references: [id])
 
   @@index([adminId])
   @@index([module])
+  @@index([locationId])
   @@index([createdAt])
   @@map("admin_audit_logs")
 }
@@ -1806,7 +1860,8 @@ model AiRunnerHealthLog {
 /// CMS-managed document category catalog with pricing rules.
 model CopyDocCategory {
   id             String    @id @default(uuid())
-  code           String    @unique
+  locationId     String?   // null = dùng chung cho mọi địa điểm
+  code           String
   name           String
   nameEn         String?
   description    String?
@@ -1831,9 +1886,12 @@ model CopyDocCategory {
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
+  location KioskLocation?  @relation(fields: [locationId], references: [id])
   requests CopyDocRequest[]
   feeRules CopyDocFeeRule[]
 
+  @@unique([locationId, code])
+  @@index([locationId])
   @@map("copy_doc_categories")
 }
 

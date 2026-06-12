@@ -1,11 +1,13 @@
 import { PageHeader } from "../components";
 import { getKioskLocations } from "../lib/data";
+import { getScope } from "../lib/session";
 import { KioskLocationsClient } from "./KioskLocationsClient";
 
 export const dynamic = "force-dynamic";
 
 export default async function KioskLocationsPage() {
-  const locations = await getKioskLocations();
+  const { scopeLocationIds } = await getScope();
+  const locations = await getKioskLocations(scopeLocationIds);
   return (
     <div>
       <PageHeader

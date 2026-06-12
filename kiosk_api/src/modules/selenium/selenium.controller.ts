@@ -1,6 +1,7 @@
 import {
-  Controller, Get, Post, Patch, Put, Delete, Param, Body, Query, HttpCode,
+  Controller, Get, Post, Patch, Put, Delete, Param, Body, Query, HttpCode, Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { WorkflowTemplateService } from './workflow-template.service';
 import { SeleniumRunnerService } from './selenium-runner.service';
@@ -196,6 +197,19 @@ export class SeleniumJobController {
   @ApiOperation({ summary: 'Runner: push a live JPEG frame, relayed as binary over WS' })
   frame(@Param('id') id: string, @Body() body: LiveFrameDto) {
     return this.jobs.pushLiveFrame(id, body);
+  }
+
+  @Get(':id/live.jpg')
+  @ApiOperation({ summary: 'Latest in-memory live frame for a job (image/jpeg)' })
+  liveFrame(@Param('id') id: string, @Res() res: Response) {
+    const buf = this.jobs.getLiveFrame(id);
+    if (!buf) { res.status(204).end(); return; }
+    res.set({
+      'Content-Type': 'image/jpeg',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Content-Length': String(buf.length),
+    });
+    res.end(buf);
   }
 
   @Get(':id/screenshots')

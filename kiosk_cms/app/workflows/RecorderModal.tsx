@@ -266,9 +266,10 @@ export function RecorderModal({
           setHasFrame(true);
           if (d.pageUrl) setCurrentUrl(d.pageUrl);
         });
-        // Step screenshot / fallback — URL-based.
+        // Step screenshot / fallback — URL-based (skip live.jpg; binary covers it).
         s.on("selenium:screenshot", (d: { jobId: string; screenshotUrl: string; pageUrl?: string }) => {
           if (d.jobId !== jobIdRef.current) return;
+          if (d.screenshotUrl?.includes("/live.jpg")) return;
           const url = `${API_URL}${d.screenshotUrl}?t=${Date.now()}`;
           const seq = ++seqRef.current;
           const loader = new Image();

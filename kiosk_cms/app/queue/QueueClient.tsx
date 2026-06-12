@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { StatusBadge, Metric } from "../components";
+import { auditHeaders } from "../lib/audit-headers";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 const WS_URL  = process.env.NEXT_PUBLIC_WS_URL  ?? "http://localhost:3001";
@@ -31,7 +32,7 @@ interface ServiceRow {
   _count: { tickets: number };
 }
 interface Stats { waiting: number; serving: number; completed: number }
-interface Props { initialServices: ServiceRow[]; initialStats: Stats }
+interface Props { initialServices: ServiceRow[]; initialStats: Stats; locationId?: string | null }
 
 /* ── CRUD form states ──────────────────────────────────── */
 interface ServiceFormState {
@@ -48,7 +49,7 @@ interface AddCounterState {
 async function apiCall(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${API_URL}${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auditHeaders() },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -60,7 +61,7 @@ async function apiCall(path: string, method = "GET", body?: unknown) {
 }
 
 /* ═══════════════════════════════════════════════════════ */
-export function QueueClient({ initialServices, initialStats }: Props) {
+export function QueueClient({ initialServices, initialStats, locationId = null }: Props) {
   const [services,   setServices]   = useState<ServiceRow[]>(initialServices);
   const [stats,      setStats]      = useState<Stats>(initialStats);
   const [busy,       setBusy]       = useState<string | null>(null);
@@ -99,7 +100,7 @@ export function QueueClient({ initialServices, initialStats }: Props) {
   async function handleSeed() {
     setBusy("seed");
     try {
-      const r = await apiCall("/queue/seed", "POST");
+      const r = await apiCall(`/queue/seed${locationId ? `?locationId=${encodeURIComponent(locationId)}` : ""}`, "POST");
       showToast(r.message);
       await refresh();
     } catch (err: unknown) {
@@ -139,6 +140,7 @@ export function QueueClient({ initialServices, initialStats }: Props) {
           description: svcForm.description || undefined,
           colorHex: svcForm.colorHex || undefined,
           prefix: svcForm.prefix || "A",
+          locationId: locationId ?? undefined,
         });
         showToast(`Đã tạo "${svcForm.name}"`);
       } else {

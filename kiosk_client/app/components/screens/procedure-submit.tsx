@@ -660,8 +660,11 @@ export function ProcedureSubmitScreen({
       });
 
       // Step screenshot (persisted) / fallback — URL-based.
+      // Live frames already arrive via the binary `selenium:frame` channel, so
+      // skip the live.jpg URL here to avoid double-rendering / flicker.
       socket.on("selenium:screenshot", (data: { jobId: string; screenshotUrl: string; pageUrl?: string }) => {
         if (data.jobId !== currentJobId) return;
+        if (data.screenshotUrl?.includes("/live.jpg")) return;
         const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
         pushFrame(`${apiBase}${data.screenshotUrl}?t=${Date.now()}`);
         if (data.pageUrl) {

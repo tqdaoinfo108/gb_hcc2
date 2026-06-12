@@ -1,24 +1,37 @@
 import Link from "next/link";
 import { getCopyDocCategories } from "../../lib/data";
+import { getScope } from "../../lib/session";
 import { EmptyState, PageHeader, Table, Td } from "../../components";
 import { createCategory } from "../actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function CategoriesPage() {
-  const categories = await getCopyDocCategories();
+  const { selectedLocationId, availableLocations, isSuperAdmin } = await getScope();
+  const effectiveLoc =
+    selectedLocationId ?? (!isSuperAdmin && availableLocations.length === 1 ? availableLocations[0].id : null);
+  const locName = effectiveLoc ? (availableLocations.find((l) => l.id === effectiveLoc)?.name ?? "Địa điểm") : null;
+  const categories = await getCopyDocCategories(effectiveLoc);
 
   return (
     <div>
       <PageHeader
         title="Loại giấy tờ sao y"
-        description="Cấu hình loại giấy tờ, mức phí, từ khoá OCR để AI tự động nhận diện và chọn lệ phí đúng."
+        description="Cấu hình loại giấy tờ, mức phí, từ khoá OCR theo từng địa điểm."
       />
+
+      <div className="mb-5 flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-slate-700">
+        <span>🗂️</span>
+        Đang cấu hình loại giấy tờ cho:{" "}
+        <b className="text-[#0068B7]">{locName ?? "Mặc định chung (mọi địa điểm)"}</b>
+        {!locName && " — chọn địa điểm ở thanh trên để cấu hình riêng."}
+      </div>
 
       {/* Create form */}
       <div className="mb-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="mb-5 text-lg font-black text-slate-900">Thêm loại giấy tờ mới</h2>
         <form action={createCategory} className="space-y-5">
+          <input type="hidden" name="locationId" value={effectiveLoc ?? ""} />
           {/* Row 1 */}
           <div className="grid grid-cols-3 gap-4">
             <div>

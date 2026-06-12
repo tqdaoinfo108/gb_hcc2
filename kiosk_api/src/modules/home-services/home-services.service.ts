@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma.service';
 
 export interface UpsertHomeServiceDto {
+  code?: string;
+  locationId?: string | null;
   name?: string;
   nameEn?: string;
   description?: string;
@@ -19,20 +21,56 @@ export interface UpsertHomeServiceDto {
 export class HomeServicesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Public endpoint — only visible services, sorted by sortOrder */
-  async getVisible() {
+  /**
+   * Public (kiosk) — visible services for a location, falling back to the
+   * global default set (locationId = null) when the location has none.
+   */
+  async getVisible(locationId?: string) {
+    if (locationId) {
+      const own = await this.prisma.kioskHomeService.findMany({
+        where: { locationId, isVisible: true, deletedAt: null },
+        orderBy: { sortOrder: 'asc' },
+      });
+      if (own.length) return own;
+    }
     return this.prisma.kioskHomeService.findMany({
-      where: { isVisible: true, deletedAt: null },
+      where: { locationId: null, isVisible: true, deletedAt: null },
       orderBy: { sortOrder: 'asc' },
     });
   }
 
-  /** CMS endpoint — all (including hidden) */
-  async getAll() {
+  /** CMS — all services (incl. hidden) for a scope. `locationId` null/absent = global set. */
+  async getAll(locationId?: string | null) {
     return this.prisma.kioskHomeService.findMany({
-      where: { deletedAt: null },
+      where: { locationId: locationId ?? null, deletedAt: null },
       orderBy: { sortOrder: 'asc' },
     });
+  }
+
+  async create(dto: UpsertHomeServiceDto) {
+    try {
+      return await this.prisma.kioskHomeService.create({
+        data: {
+          locationId: dto.locationId ?? null,
+          code: dto.code ?? `SVC_${Date.now()}`,
+          name: dto.name ?? 'Dịch vụ mới',
+          nameEn: dto.nameEn,
+          description: dto.description,
+          icon: dto.icon,
+          colorHex: dto.colorHex,
+          bgColorHex: dto.bgColorHex,
+          screenId: dto.screenId ?? 'submit',
+          badge: dto.badge ?? null,
+          sortOrder: dto.sortOrder ?? 99,
+          isVisible: dto.isVisible ?? true,
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Mã dịch vụ đã tồn tại trong địa điểm này');
+      }
+      throw err;
+    }
   }
 
   async update(id: string, dto: UpsertHomeServiceDto) {
@@ -48,9 +86,17 @@ export class HomeServicesService {
     }
   }
 
-  /** Idempotent seed — creates default home services */
-  async seed() {
-    const existing = await this.prisma.kioskHomeService.count({ where: { deletedAt: null } });
+  async remove(id: string) {
+    const exists = await this.prisma.kioskHomeService.findUnique({ where: { id } });
+    if (!exists || exists.deletedAt) throw new NotFoundException(`Home service ${id} not found`);
+    await this.prisma.kioskHomeService.update({ where: { id }, data: { deletedAt: new Date() } });
+    return { ok: true };
+  }
+
+  /** Idempotent seed — creates the default tile set for a scope (global or a location). */
+  async seed(locationId?: string | null) {
+    const loc = locationId ?? null;
+    const existing = await this.prisma.kioskHomeService.count({ where: { locationId: loc, deletedAt: null } });
     if (existing > 0) {
       return { seeded: false, message: 'Home services already exist', count: existing };
     }
@@ -136,7 +182,9 @@ export class HomeServicesService {
       },
     ];
 
-    await this.prisma.kioskHomeService.createMany({ data: DEFAULTS });
+    await this.prisma.kioskHomeService.createMany({
+      data: DEFAULTS.map((d) => ({ ...d, locationId: loc })),
+    });
     return { seeded: true, message: 'Default home services created', count: DEFAULTS.length };
   }
 }

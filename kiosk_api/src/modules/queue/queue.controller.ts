@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { QueueService } from './queue.service';
 
@@ -7,19 +7,19 @@ import { QueueService } from './queue.service';
 export class QueueController {
   constructor(private readonly service: QueueService) {}
 
-  /** Seed default queue services + counters (idempotent) */
+  /** Seed default queue services + counters (idempotent, per location) */
   @Post('seed')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Seed default queue services (idempotent)' })
-  seed() {
-    return this.service.seedServices();
+  seed(@Query('locationId') locationId?: string) {
+    return this.service.seedServices(locationId ?? null);
   }
 
-  /** List all active services with waiting-ticket count */
+  /** List active services for a location (falls back to global) with waiting-ticket count */
   @Get('services')
-  @ApiOperation({ summary: 'Get all active queue services' })
-  getServices() {
-    return this.service.getServices();
+  @ApiOperation({ summary: 'Get active queue services (by location, fallback global)' })
+  getServices(@Query('locationId') locationId?: string) {
+    return this.service.getServices(locationId);
   }
 
   /** Real-time stats for a single service */
@@ -91,6 +91,7 @@ export class QueueController {
       description?: string;
       colorHex?: string;
       prefix?: string;
+      locationId?: string;
     },
   ) {
     return this.service.createService(body);

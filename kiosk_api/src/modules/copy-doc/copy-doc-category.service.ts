@@ -7,14 +7,23 @@ import { CreateCopyDocCategoryDto, UpdateCopyDocCategoryDto, CreateFeeRuleDto } 
 export class CopyDocCategoryService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll(includeInactive = false) {
+  async findAll(includeInactive = false, locationId?: string) {
+    const include = {
+      feeRules: { where: { isActive: true }, orderBy: { minQuantity: 'asc' as const } },
+      _count: { select: { requests: true } },
+    };
+    const base = { deletedAt: null, ...(includeInactive ? {} : { isActive: true }) };
+    // Location-specific set, falling back to the global set (locationId null).
+    if (locationId) {
+      const own = await this.prisma.copyDocCategory.findMany({
+        where: { ...base, locationId },
+        include, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      });
+      if (own.length) return own;
+    }
     return this.prisma.copyDocCategory.findMany({
-      where: { deletedAt: null, ...(includeInactive ? {} : { isActive: true }) },
-      include: {
-        feeRules: { where: { isActive: true }, orderBy: { minQuantity: 'asc' } },
-        _count: { select: { requests: true } },
-      },
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      where: { ...base, locationId: null },
+      include, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
   }
 
@@ -37,6 +46,7 @@ export class CopyDocCategoryService {
     if (exists) throw new ConflictException(`Category code "${dto.code}" already exists`);
     return this.prisma.copyDocCategory.create({
       data: {
+        locationId: (dto as { locationId?: string }).locationId ?? null,
         code: dto.code.trim().toUpperCase(),
         name: dto.name.trim(),
         nameEn: dto.nameEn?.trim(),

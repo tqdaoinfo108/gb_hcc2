@@ -1,41 +1,55 @@
-import { getAdminUsers } from "../lib/data";
-import { EmptyState, PageHeader, StatusBadge, Table, Td, fmt } from "../components";
+import { PageHeader, EmptyState } from "../components";
+import { getScope } from "../lib/session";
+import { UsersClient } from "./UsersClient";
 
 export const dynamic = "force-dynamic";
 
+const API = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3001";
+
+async function load<T>(path: string, fallback: T): Promise<T> {
+  try {
+    const r = await fetch(`${API}${path}`, { cache: "no-store" });
+    if (!r.ok) return fallback;
+    return (await r.json()) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export default async function UsersPage() {
-  const users = await getAdminUsers();
+  const { isSuperAdmin } = await getScope();
+
+  if (!isSuperAdmin) {
+    return (
+      <div>
+        <PageHeader title="Người dùng" description="Quản trị tài khoản, vai trò và phân quyền theo địa điểm." />
+        <EmptyState
+          title="Không có quyền truy cập"
+          detail="Chỉ quản trị hệ thống (Super Admin) mới được quản lý người dùng."
+        />
+      </div>
+    );
+  }
+
+  const [users, roles, locations, modules] = await Promise.all([
+    load<any[]>("/admin/users", []),
+    load<any[]>("/admin/roles", []),
+    load<any[]>("/admin/locations", []),
+    load<any[]>("/admin/modules", []),
+  ]);
 
   return (
     <div>
-      <PageHeader title="Quản trị viên" description="RBAC — tài khoản admin, vai trò, quyền hạn, lịch sử đăng nhập." />
-
-      {users.length === 0 ? (
-        <EmptyState title="Chưa có người dùng" detail="Tạo tài khoản qua POST /admin/users hoặc seeding." />
-      ) : (
-        <Table headers={["Tên đầy đủ", "Tên đăng nhập", "Email", "Tổ chức", "Vai trò", "Trạng thái", "Đăng nhập cuối"]}>
-          {users.map(u => (
-            <tr key={u.id} className="border-t border-slate-100">
-              <Td bold>{u.fullName}{u.isSuperAdmin ? " 👑" : ""}</Td>
-              <Td><span className="font-mono text-sm">{u.username}</span></Td>
-              <Td>{u.email}</Td>
-              <Td>{u.organization?.name ?? "—"}</Td>
-              <Td>
-                <div className="flex flex-wrap gap-1">
-                  {u.userRoles.length > 0
-                    ? u.userRoles.map(ur => (
-                        <span key={ur.id} className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-bold text-blue-600">{ur.role.code}</span>
-                      ))
-                    : <span className="text-xs text-slate-400">Không có vai trò</span>
-                  }
-                </div>
-              </Td>
-              <Td><StatusBadge status={u.isActive ? "active" : "offline"} /></Td>
-              <Td>{fmt(u.lastLoginAt)}</Td>
-            </tr>
-          ))}
-        </Table>
-      )}
+      <PageHeader
+        title="Người dùng"
+        description="Quản trị tài khoản, vai trò, quyền theo module/service và phạm vi địa điểm."
+      />
+      <UsersClient
+        initialUsers={users as any}
+        roles={(roles as any[]).map((r) => ({ id: r.id, code: r.code, name: r.name }))}
+        locations={locations as any}
+        modules={modules as any}
+      />
     </div>
   );
 }

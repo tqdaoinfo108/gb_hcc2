@@ -147,7 +147,10 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const homeServicesApi = {
-  getVisible: () => apiRequest<HomeServiceData[]>("/kiosk/home-services"),
+  getVisible: (locationId?: string) =>
+    apiRequest<HomeServiceData[]>(
+      `/kiosk/home-services${locationId ? `?locationId=${encodeURIComponent(locationId)}` : ""}`,
+    ),
 };
 
 export const sessionsApi = {
@@ -194,7 +197,8 @@ export const feedbackApi = {
 
 export const queueApi = {
   seed:        () => apiRequest<{ seeded: boolean; message: string; count: number }>("/queue/seed", { method: "POST" }),
-  getServices: () => apiRequest<QueueServiceData[]>("/queue/services"),
+  getServices: (locationId?: string) =>
+    apiRequest<QueueServiceData[]>(`/queue/services${locationId ? `?locationId=${encodeURIComponent(locationId)}` : ""}`),
   getStats:    (id: string) => apiRequest<ServiceStats>(`/queue/services/${id}/stats`),
   issueTicket: (serviceId: string, body?: { kioskId?: string; sessionId?: string }) =>
     apiRequest<QueueTicketData>(`/queue/${serviceId}/issue`, { method: "POST", body: JSON.stringify(body ?? {}) }),
@@ -426,7 +430,8 @@ export interface ScanSessionData {
 }
 
 export const copyDocApi = {
-  getCategories: () => apiRequest<CopyDocCategoryData[]>("/copy-doc/categories"),
+  getCategories: (locationId?: string) =>
+    apiRequest<CopyDocCategoryData[]>(`/copy-doc/categories${locationId ? `?locationId=${encodeURIComponent(locationId)}` : ""}`),
 
   initiateRequest: (sessionId: string, kioskDeviceId?: string) =>
     apiRequest<CopyDocRequestData>("/copy-doc/requests", {

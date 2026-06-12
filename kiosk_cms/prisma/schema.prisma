@@ -682,7 +682,8 @@ model SubmissionReceipt {
 
 model KioskHomeService {
   id          String    @id @default(uuid())
-  code        String    @unique
+  locationId  String?
+  code        String
   name        String
   nameEn      String?
   description String?
@@ -697,6 +698,8 @@ model KioskHomeService {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
+  @@unique([locationId, code])
+  @@index([locationId])
   @@map("kiosk_home_services")
 }
 
@@ -706,7 +709,8 @@ model KioskHomeService {
 
 model QueueService {
   id            String    @id @default(uuid())
-  code          String    @unique
+  locationId    String?
+  code          String
   name          String
   nameEn        String?
   description   String?
@@ -722,6 +726,8 @@ model QueueService {
   tickets     QueueTicket[]
   dailyStats  QueueDailyStatistic[]
 
+  @@unique([locationId, code])
+  @@index([locationId])
   @@map("queue_services")
 }
 
@@ -1322,7 +1328,8 @@ model KioskStatistic {
 }
 model CopyDocCategory {
   id             String    @id @default(uuid())
-  code           String    @unique
+  locationId     String?
+  code           String
   name           String
   nameEn         String?
   description    String?
@@ -1350,6 +1357,8 @@ model CopyDocCategory {
   requests CopyDocRequest[]
   feeRules CopyDocFeeRule[]
 
+  @@unique([locationId, code])
+  @@index([locationId])
   @@map("copy_doc_categories")
 }
 

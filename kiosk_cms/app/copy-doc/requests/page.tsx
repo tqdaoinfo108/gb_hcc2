@@ -1,13 +1,15 @@
 import { getCopyDocRequests, getCopyDocStats } from "../../lib/data";
+import { getScope } from "../../lib/session";
 import { PageHeader, Metric } from "../../components";
 import { RequestsClient } from "./RequestsClient";
 
 export const dynamic = "force-dynamic";
 
 export default async function RequestsPage() {
+  const { scopeLocationIds } = await getScope();
   const [requests, stats] = await Promise.all([
-    getCopyDocRequests(undefined, 100),
-    getCopyDocStats(),
+    getCopyDocRequests(undefined, 100, scopeLocationIds),
+    getCopyDocStats(scopeLocationIds),
   ]);
 
   return (
@@ -30,6 +32,14 @@ export default async function RequestsPage() {
         baseFee:       Number(r.baseFee),
         processingFee: Number(r.processingFee),
         totalFee:      Number(r.totalFee),
+        // The included category carries Decimal fields — serialise them too.
+        category: r.category
+          ? {
+              ...r.category,
+              pricePerCopy:      Number(r.category.pricePerCopy),
+              processingFeeRate: Number(r.category.processingFeeRate),
+            }
+          : null,
       }))} />
     </div>
   );
