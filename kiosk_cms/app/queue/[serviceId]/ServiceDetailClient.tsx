@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { StatusBadge, fmt } from "../../components";
+import { auditHeaders } from "../../lib/audit-headers";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 const WS_URL  = process.env.NEXT_PUBLIC_WS_URL  ?? "http://localhost:3001";
@@ -41,7 +42,7 @@ interface Props {
 async function apiCall(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${API_URL}${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auditHeaders() },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(`${method} ${path} → ${res.status}`);

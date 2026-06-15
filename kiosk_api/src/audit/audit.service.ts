@@ -22,24 +22,29 @@ export class AuditService {
     ipAddress?: string;
     userAgent?: string;
   }) {
-    return this.prisma.adminAuditLog.create({
-      data: {
-        adminId: input.adminId ?? null,
-        actorName: input.actorName ?? null,
-        locationId: input.locationId ?? null,
-        action: input.action,
-        module: input.module,
-        method: input.method,
-        path: input.path,
-        statusCode: input.statusCode,
-        targetId: input.targetId,
-        targetType: input.targetType,
-        before: input.before as Prisma.InputJsonValue | undefined,
-        after: input.after as Prisma.InputJsonValue | undefined,
-        ipAddress: input.ipAddress,
-        userAgent: input.userAgent,
-      },
-    });
+    const data = {
+      adminId: input.adminId ?? null,
+      actorName: input.actorName ?? null,
+      locationId: input.locationId ?? null,
+      action: input.action,
+      module: input.module,
+      method: input.method,
+      path: input.path,
+      statusCode: input.statusCode,
+      targetId: input.targetId,
+      targetType: input.targetType,
+      before: input.before as Prisma.InputJsonValue | undefined,
+      after: input.after as Prisma.InputJsonValue | undefined,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+    };
+    try {
+      return await this.prisma.adminAuditLog.create({ data });
+    } catch {
+      // adminId may reference a non-existent user (stale token) → keep the log
+      // but drop the FK link rather than losing the audit entry.
+      return this.prisma.adminAuditLog.create({ data: { ...data, adminId: null } });
+    }
   }
 
   /** Paginated audit log query, scoped by location. */

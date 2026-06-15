@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { auditHeaders } from "../lib/audit-headers";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "http://localhost:3001";
@@ -372,7 +373,7 @@ export function RecorderModal({
         uploadField: s.uploadField, onFailure: s.onFailure ?? "STOP",
       }));
       const res = await fetch(`${API_URL}/selenium/templates/${templateId}/steps`, {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ steps: payload }),
+        method: "PUT", headers: { "Content-Type": "application/json", ...auditHeaders() }, body: JSON.stringify({ steps: payload }),
       });
       if (!res.ok) throw new Error(await res.text());
       onSaved();

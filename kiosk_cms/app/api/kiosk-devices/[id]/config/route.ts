@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
+import { forwardAuditHeaders } from "../../../../lib/forward-audit";
 
 const API_URL =
   process.env.API_URL ??
@@ -18,7 +19,7 @@ export async function PATCH(
       `${API_URL}/kiosk-devices/${encodeURIComponent(id)}/config`,
       {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await forwardAuditHeaders()) },
         body,
         cache: "no-store",
       },

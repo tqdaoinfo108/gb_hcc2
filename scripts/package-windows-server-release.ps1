@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
   [string]$OutputDir,
-  [switch]$IncludeNodeModules
+  [switch]$IncludeNodeModules,
+  [string]$ReleaseApiUrl,
+  [string]$ReleaseWsUrl
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,11 +89,36 @@ Write-Host "Root:    $Root"
 Write-Host "Output:  $OutputDir"
 Write-Host "Modules: $(if ($IncludeNodeModules) { 'included' } else { 'not included' })"
 
+# --- resolve production API URL for this release ---
+# Priority: param → TAURI_API_URL in .env → fallback localhost
+if (-not $ReleaseApiUrl -or -not $ReleaseWsUrl) {
+  $envContent = Get-Content (Join-Path $Root ".env") -Raw -ErrorAction SilentlyContinue
+  if (-not $ReleaseApiUrl -and $envContent -match '(?m)^TAURI_API_URL=(.+)') {
+    $ReleaseApiUrl = $Matches[1].Trim()
+  }
+  if (-not $ReleaseWsUrl -and $envContent -match '(?m)^TAURI_WS_URL=(.+)') {
+    $ReleaseWsUrl = $Matches[1].Trim()
+  }
+}
+if (-not $ReleaseApiUrl) { $ReleaseApiUrl = "http://localhost:3001" }
+if (-not $ReleaseWsUrl)  { $ReleaseWsUrl  = $ReleaseApiUrl }
+
+Write-Host "Release API URL : $ReleaseApiUrl" -ForegroundColor Yellow
+Write-Host "Release WS URL  : $ReleaseWsUrl"  -ForegroundColor Yellow
+
+# Set NEXT_PUBLIC_* so Next.js bakes the production URL into the bundle
+$env:NEXT_PUBLIC_API_URL = $ReleaseApiUrl
+$env:NEXT_PUBLIC_WS_URL  = $ReleaseWsUrl
+
 Invoke-Checked $Root "node scripts\sync-env.mjs"
 Invoke-Checked (Join-Path $Root "packages\shared-types") "npm run build"
 Invoke-Checked (Join-Path $Root "kiosk_api") "npm run build"
 Invoke-Checked (Join-Path $Root "kiosk_cms") "npm run build"
 Invoke-Checked (Join-Path $Root "kiosk_client") "npm run build"
+
+# Restore so subsequent local-dev commands are not affected
+Remove-Item Env:NEXT_PUBLIC_API_URL -ErrorAction SilentlyContinue
+Remove-Item Env:NEXT_PUBLIC_WS_URL  -ErrorAction SilentlyContinue
 
 New-CleanDir $OutputDir
 New-Item -ItemType Directory -Force -Path (Join-Path $OutputDir "logs") | Out-Null
@@ -163,6 +190,11 @@ $RunBackend = @'
 setlocal EnableExtensions
 cd /d "%~dp0kiosk_api"
 set API_PORT=3001
+echo [backend] Syncing Prisma client with schema...
+call npx prisma generate --schema=prisma/schema.prisma
+echo [backend] Applying pending DB migrations...
+call npx prisma migrate deploy --schema=prisma/schema.prisma
+echo [backend] Starting API...
 node dist/main.js
 '@
 Set-Content -Path (Join-Path $OutputDir "run-backend.bat") -Value $RunBackend -Encoding ASCII
@@ -171,8 +203,9 @@ $RunCms = @'
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0kiosk_cms"
-set NEXT_PUBLIC_API_URL=http://localhost:3001
-set NEXT_PUBLIC_WS_URL=http://localhost:3001
+echo [cms] Syncing Prisma client with schema...
+call npx prisma generate --schema=prisma/schema.prisma
+echo [cms] Starting Admin CMS...
 npm run start
 '@
 Set-Content -Path (Join-Path $OutputDir "run-cms.bat") -Value $RunCms -Encoding ASCII
@@ -181,8 +214,6 @@ $RunClient = @'
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0kiosk_client"
-set NEXT_PUBLIC_API_URL=http://localhost:3001
-set NEXT_PUBLIC_WS_URL=http://localhost:3001
 npm run start
 '@
 Set-Content -Path (Join-Path $OutputDir "run-client.bat") -Value $RunClient -Encoding ASCII
@@ -221,8 +252,6 @@ if not exist "kiosk_api\node_modules" (
 set API_PORT=3001
 set CMS_PORT=3002
 set KIOSK_PORT=3000
-set NEXT_PUBLIC_API_URL=http://localhost:3001
-set NEXT_PUBLIC_WS_URL=http://localhost:3001
 set API_BASE=http://localhost:3001
 set RUNNER_ID=runner-01
 set BROWSER_MODE=hidden

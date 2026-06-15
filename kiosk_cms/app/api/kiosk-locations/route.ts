@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { forwardAuditHeaders } from "../../lib/forward-audit";
 
 const API_URL = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3001";
 
@@ -9,7 +10,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   return proxy("/kiosk-devices/locations", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await forwardAuditHeaders()) },
     body: await request.text(),
     cache: "no-store",
   });

@@ -39,7 +39,7 @@ const NAV: NavGroup[] = [
       { label: "Màn hình Home", href: "/home-services", icon: "🏠", module: "home_services" },
       { label: "Thiết bị", href: "/devices", icon: "🖥️", module: "devices" },
       { label: "OTA Update", href: "/ota", icon: "📡", module: "ota" },
-      { label: "Remote Debug", href: "/remote-debug", icon: "🔧", module: "remote_debug" },
+      { label: "Điều khiển từ xa", href: "/remote-debug", icon: "🔧", module: "remote_debug" },
     ],
   },
   {

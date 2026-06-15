@@ -158,6 +158,32 @@ fn restart_app(app: tauri::AppHandle) {
   app.restart();
 }
 
+/// Reboot the host machine (remote command from the CMS console).
+#[tauri::command]
+fn reboot_device() -> Result<(), String> {
+  run_power_command("/r")
+}
+
+/// Power off the host machine (remote command from the CMS console).
+#[tauri::command]
+fn shutdown_device() -> Result<(), String> {
+  run_power_command("/s")
+}
+
+#[cfg(windows)]
+fn run_power_command(flag: &str) -> Result<(), String> {
+  std::process::Command::new("shutdown")
+    .args([flag, "/t", "0", "/f"])
+    .spawn()
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn run_power_command(_flag: &str) -> Result<(), String> {
+  Err("power command is only supported on Windows kiosks".to_string())
+}
+
 #[tauri::command]
 fn health_check() -> serde_json::Value {
   serde_json::json!({ "status": "ok" })
@@ -204,7 +230,8 @@ mod windows_kiosk {
   use std::ptr;
   use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
   use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_ESCAPE, VK_F4, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_TAB,
+    GetAsyncKeyState, VK_CONTROL, VK_ESCAPE, VK_F1, VK_F4, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    VK_TAB,
   };
   use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, SetWindowsHookExW, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL,
@@ -225,6 +252,12 @@ mod windows_kiosk {
       let alt = key_down(VK_MENU);
       let ctrl = key_down(VK_CONTROL);
       let shift = key_down(VK_SHIFT);
+
+      // Hidden service exit: Ctrl + Alt + F1
+      if ctrl && alt && key == VK_F1 {
+        std::process::exit(0);
+      }
+
       let blocked = key == VK_LWIN
         || key == VK_RWIN
         || (key == VK_TAB && alt)
@@ -254,6 +287,144 @@ mod windows_kiosk {
   }
 }
 
+/* ───────────────── Native offline voice (Vosk, Vietnamese) ─────────────────
+ * Feature-gated (`--features voice`). The Web Speech API does not work inside
+ * WebView2, so speech-to-text runs natively: cpal captures the mic, Vosk decodes
+ * with a bundled Vietnamese model, and partial/final transcripts are emitted to
+ * the webview as `voice:partial` / `voice:final` events. Only one session runs at
+ * a time (a second voice_start while listening is ignored) so fast taps never
+ * stack overlapping recognizers. */
+#[cfg(feature = "voice")]
+mod voice {
+  use std::sync::atomic::{AtomicBool, Ordering};
+  use std::sync::{mpsc, Mutex};
+  use std::time::Duration;
+  use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+  use tauri::{AppHandle, Emitter, Manager};
+  use vosk::{CompleteResult, DecodingState, Model, Recognizer};
+
+  static RUNNING: AtomicBool = AtomicBool::new(false);
+  static STOP_TX: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
+
+  fn model_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("VOSK_MODEL_PATH") {
+      let pb = std::path::PathBuf::from(p);
+      if pb.exists() { return Some(pb); }
+    }
+    if let Ok(p) = app.path().resolve("resources/vosk-model-vi", tauri::path::BaseDirectory::Resource) {
+      if p.exists() { return Some(p); }
+    }
+    None
+  }
+
+  pub fn start(app: AppHandle) -> Result<(), String> {
+    // Already listening → ignore so rapid taps don't stack sessions.
+    if RUNNING.swap(true, Ordering::SeqCst) { return Ok(()); }
+
+    let model_dir = match model_path(&app) {
+      Some(p) => p,
+      None => { RUNNING.store(false, Ordering::SeqCst); return Err("Không tìm thấy mô hình giọng nói (vosk-model-vi).".into()); }
+    };
+
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    *STOP_TX.lock().unwrap() = Some(stop_tx);
+
+    std::thread::spawn(move || {
+      if let Err(e) = run_loop(&app, &model_dir, stop_rx) {
+        let _ = app.emit("voice:error", e);
+      }
+      RUNNING.store(false, Ordering::SeqCst);
+      let _ = app.emit("voice:ended", ());
+    });
+    Ok(())
+  }
+
+  pub fn stop() -> Result<(), String> {
+    if let Some(tx) = STOP_TX.lock().unwrap().take() { let _ = tx.send(()); }
+    Ok(())
+  }
+
+  fn run_loop(app: &AppHandle, model_dir: &std::path::Path, stop_rx: mpsc::Receiver<()>) -> Result<(), String> {
+    let host = cpal::default_host();
+    let device = host.default_input_device().ok_or("Không có thiết bị thu âm.")?;
+    let cfg = device.default_input_config().map_err(|e| e.to_string())?;
+    let sample_rate = cfg.sample_rate().0 as f32;
+    let channels = cfg.channels() as usize;
+
+    let model = Model::new(model_dir.to_string_lossy().as_ref()).ok_or("Không nạp được mô hình Vosk.")?;
+    let mut rec = Recognizer::new(&model, sample_rate).ok_or("Không khởi tạo được bộ nhận dạng.")?;
+
+    let (tx, rx) = mpsc::channel::<Vec<i16>>();
+    let err_fn = |e| eprintln!("voice stream error: {e}");
+    let stream_cfg = cfg.config();
+
+    // Downmix to mono i16 in the audio callback; decode in this loop.
+    let stream = match cfg.sample_format() {
+      cpal::SampleFormat::F32 => device.build_input_stream(&stream_cfg,
+        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+          let _ = tx.send(data.chunks(channels).map(|f| (f[0] * 32767.0) as i16).collect());
+        }, err_fn, None),
+      cpal::SampleFormat::I16 => device.build_input_stream(&stream_cfg,
+        move |data: &[i16], _: &cpal::InputCallbackInfo| {
+          let _ = tx.send(data.chunks(channels).map(|f| f[0]).collect());
+        }, err_fn, None),
+      cpal::SampleFormat::U16 => device.build_input_stream(&stream_cfg,
+        move |data: &[u16], _: &cpal::InputCallbackInfo| {
+          let _ = tx.send(data.chunks(channels).map(|f| (f[0] as i32 - 32768) as i16).collect());
+        }, err_fn, None),
+      _ => return Err("Định dạng âm thanh không hỗ trợ.".into()),
+    }.map_err(|e| e.to_string())?;
+
+    stream.play().map_err(|e| e.to_string())?;
+
+    let mut last_partial = String::new();
+    loop {
+      if stop_rx.try_recv().is_ok() { break; }
+      match rx.recv_timeout(Duration::from_millis(100)) {
+        Ok(samples) => match rec.accept_waveform(&samples) {
+          Ok(DecodingState::Finalized) => {
+            if let CompleteResult::Single(r) = rec.result() {
+              let text = r.text.trim().to_string();
+              if !text.is_empty() { let _ = app.emit("voice:final", text); break; }
+            }
+          }
+          Ok(DecodingState::Running) => {
+            let p = rec.partial_result().partial.trim().to_string();
+            if !p.is_empty() && p != last_partial {
+              last_partial = p.clone();
+              let _ = app.emit("voice:partial", p);
+            }
+          }
+          Ok(DecodingState::Failed) => {}
+          Err(_) => {}
+        },
+        Err(mpsc::RecvTimeoutError::Timeout) => {}
+        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+      }
+    }
+    drop(stream);
+    Ok(())
+  }
+}
+
+/// Start native voice capture (emits `voice:partial` / `voice:final`).
+#[tauri::command]
+fn voice_start(app: tauri::AppHandle) -> Result<(), String> {
+  #[cfg(feature = "voice")]
+  { voice::start(app) }
+  #[cfg(not(feature = "voice"))]
+  { let _ = app; Err("Tính năng giọng nói chưa được bật trong bản build này (build với --features voice).".into()) }
+}
+
+/// Stop the current voice capture session.
+#[tauri::command]
+fn voice_stop() -> Result<(), String> {
+  #[cfg(feature = "voice")]
+  { voice::stop() }
+  #[cfg(not(feature = "voice"))]
+  { Ok(()) }
+}
+
 pub fn run() {
   tauri::Builder::default()
     .setup(|app| {
@@ -276,7 +447,11 @@ pub fn run() {
       unlock_kiosk,
       clear_session_data,
       restart_app,
-      health_check
+      reboot_device,
+      shutdown_device,
+      health_check,
+      voice_start,
+      voice_stop
     ])
     .run(tauri::generate_context!())
     .expect("error while running smart kiosk");

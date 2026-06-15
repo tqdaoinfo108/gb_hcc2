@@ -15,6 +15,8 @@ export interface GenerateInput {
   /** Ask the provider to return strict JSON when supported. */
   json?: boolean;
   temperature?: number;
+  /** Cap the response length. */
+  maxTokens?: number;
 }
 
 export interface GenerateResult {
@@ -57,7 +59,7 @@ class OllamaAdapter implements AiProviderAdapter {
         model: cfg.modelName,
         stream: false,
         format: input.json ? 'json' : undefined,
-        options: { temperature: input.temperature ?? 0.2 },
+        options: { temperature: input.temperature ?? 0.2, num_predict: input.maxTokens ?? undefined },
         messages: [
           ...(input.system ? [{ role: 'system', content: input.system }] : []),
           { role: 'user', content: input.prompt },
@@ -98,6 +100,7 @@ class GeminiAdapter implements AiProviderAdapter {
         contents: [{ role: 'user', parts: [{ text: input.prompt }] }],
         generationConfig: {
           temperature: input.temperature ?? 0.2,
+          maxOutputTokens: input.maxTokens ?? undefined,
           responseMimeType: input.json ? 'application/json' : 'text/plain',
         },
       }),
@@ -141,6 +144,7 @@ class OpenAiCompatAdapter implements AiProviderAdapter {
       body: JSON.stringify({
         model: cfg.modelName,
         temperature: input.temperature ?? 0.2,
+        max_tokens: input.maxTokens ?? undefined,
         response_format: input.json ? { type: 'json_object' } : undefined,
         messages: [
           ...(input.system ? [{ role: 'system', content: input.system }] : []),

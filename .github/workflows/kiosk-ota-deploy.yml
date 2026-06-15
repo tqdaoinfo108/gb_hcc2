@@ -1,0 +1,137 @@
+name: Build & Deploy Kiosk (OTA)
+
+# On every push to main that touches the kiosk client, build the Windows MSI and
+# publish it as a new OTA release on the API so kiosks update automatically.
+# Can also be run manually (Actions → Run workflow) to control rollout %, etc.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "kiosk_client/**"
+      - "packages/shared-types/**"
+      - "scripts/set-version.mjs"
+      - ".github/workflows/kiosk-ota-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (semver). Blank = 1.0.<run_number>"
+        required: false
+      rollout:
+        description: "Canary rollout percent (0-100)"
+        required: false
+        default: "100"
+      mandatory:
+        description: "Mandatory update?"
+        type: boolean
+        default: false
+      publish:
+        description: "Publish immediately (ROLLING)? Uncheck to create as DRAFT"
+        type: boolean
+        default: true
+
+concurrency:
+  group: kiosk-ota-deploy
+  cancel-in-progress: false
+
+env:
+  API_URL: http://apihcc.gvbsoft.vn
+
+jobs:
+  build-deploy:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "kiosk_client/src-tauri -> target"
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $override = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($override)) {
+            $base = (Get-Content kiosk_client/package.json -Raw | ConvertFrom-Json).version
+            $mm = (($base -split '\.')[0..1]) -join '.'
+            $v = "$mm.${{ github.run_number }}"
+          } else {
+            $v = $override.Trim()
+          }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Resolved version: $v"
+
+      - name: Stamp version into client
+        run: node scripts/set-version.mjs ${{ steps.ver.outputs.version }}
+
+      - name: Build shared-types
+        shell: pwsh
+        run: |
+          npm --prefix packages/shared-types install --no-audit --no-fund
+          npm --prefix packages/shared-types run build
+
+      - name: Install client dependencies
+        working-directory: kiosk_client
+        run: npm ci --no-audit --no-fund
+
+      - name: Build Windows MSI
+        working-directory: kiosk_client
+        env:
+          TAURI_API_URL: ${{ env.API_URL }}
+          TAURI_WS_URL: ${{ env.API_URL }}
+          NEXT_PUBLIC_APP_VERSION: ${{ steps.ver.outputs.version }}
+        run: npm run tauri:build
+
+      - name: Locate MSI
+        id: msi
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem "kiosk_client/src-tauri/target/release/bundle/msi/*.msi" | Select-Object -First 1
+          if (-not $msi) { throw "MSI not found after build" }
+          "path=$($msi.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "MSI: $($msi.Name) ($([math]::Round($msi.Length/1MB,1)) MB)"
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-kiosk-msi-${{ steps.ver.outputs.version }}
+          path: ${{ steps.msi.outputs.path }}
+          if-no-files-found: error
+
+      - name: Deploy release to OTA API
+        shell: pwsh
+        env:
+          OTA_DEPLOY_TOKEN: ${{ secrets.OTA_DEPLOY_TOKEN }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          MSI_PATH: ${{ steps.msi.outputs.path }}
+          IN_ROLLOUT: ${{ github.event.inputs.rollout }}
+          IN_MANDATORY: ${{ github.event.inputs.mandatory }}
+          IN_PUBLISH: ${{ github.event.inputs.publish }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:OTA_DEPLOY_TOKEN)) {
+            throw "Missing repo secret OTA_DEPLOY_TOKEN (Settings → Secrets and variables → Actions)."
+          }
+          $notes = if ([string]::IsNullOrWhiteSpace($env:COMMIT_MSG)) { "CI build $env:VERSION" } else { ($env:COMMIT_MSG -split "`n")[0] }
+          $rollout = if ([string]::IsNullOrWhiteSpace($env:IN_ROLLOUT)) { "100" } else { $env:IN_ROLLOUT }
+          $mandatory = if ([string]::IsNullOrWhiteSpace($env:IN_MANDATORY)) { "false" } else { $env:IN_MANDATORY }
+          $publish = if ([string]::IsNullOrWhiteSpace($env:IN_PUBLISH)) { "true" } else { $env:IN_PUBLISH }
+          Write-Host "Deploying v$env:VERSION (rollout=$rollout%, mandatory=$mandatory, publish=$publish)"
+          curl.exe -sS -f -X POST "$env:API_URL/ota/deploy" `
+            -H "x-deploy-token: $env:OTA_DEPLOY_TOKEN" `
+            -F "file=@$env:MSI_PATH;type=application/octet-stream" `
+            -F "version=$env:VERSION" `
+            -F "notes=$notes" `
+            -F "rolloutPercent=$rollout" `
+            -F "isMandatory=$mandatory" `
+            -F "publish=$publish" `
+            -F "channel=STABLE" `
+            -F "createdByName=GitHub Actions"
+          Write-Host "`nOTA deploy complete."

@@ -1,17 +1,26 @@
 import {
-  Controller, Get, Post, Patch, Delete, Param, Body,
+  Controller, Get, Post, Patch, Put, Delete, Param, Body, Headers, Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AiGatewayService } from './ai-gateway.service';
 import { AiRunnerService } from './ai-runner.service';
 import { AiHealthService } from './ai-health.service';
-import { ChatDto, CreateAiRunnerDto, UpdateAiRunnerDto } from './ai-gateway.dto';
+import { ChatbotConfigService } from './chatbot-config.service';
+import { ChatDto, CreateAiRunnerDto, UpdateAiRunnerDto, UpdateChatbotConfigDto } from './ai-gateway.dto';
+
+function decodeName(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  try { return decodeURIComponent(raw); } catch { return raw; }
+}
 
 /* ─── Kiosk-facing entry point ─────────────────────────── */
 @ApiTags('AI Gateway (kiosk)')
 @Controller('ai')
 export class AiGatewayController {
-  constructor(private gateway: AiGatewayService) {}
+  constructor(
+    private gateway: AiGatewayService,
+    private chatbotConfig: ChatbotConfigService,
+  ) {}
 
   @Post('chat')
   @ApiOperation({ summary: 'Citizen chat → intent → procedure → action chips' })
@@ -20,12 +29,51 @@ export class AiGatewayController {
   }
 
   @Post('action')
-  @ApiOperation({ summary: 'Execute an action chip (OPEN_PROCEDURE → shared workflow launch)' })
+  @ApiOperation({ summary: 'Execute an action chip (START_WORKFLOW/OPEN_PROCEDURE → shared workflow launch)' })
   action(@Body() dto: {
     type: string; procedureId?: string;
     kioskSessionId: string; citizenId?: string; deviceSerial?: string;
   }) {
     return this.gateway.executeAction(dto);
+  }
+
+  @Get('reports')
+  @ApiOperation({ summary: 'CMS: AI usage report (conversations, intents, providers, jobs)' })
+  reports(@Query('days') days?: string) {
+    return this.gateway.usageReport(days ? parseInt(days, 10) : 30);
+  }
+
+  /* ── Chatbot configuration (per-location; no locationId = global default) ── */
+  @Get('locations')
+  @ApiOperation({ summary: 'CMS: locations for the config dropdown' })
+  listLocations() { return this.chatbotConfig.listLocations(); }
+
+  @Get('config')
+  @ApiOperation({ summary: 'CMS: full chatbot config for a location (or global)' })
+  getConfig(@Query('locationId') locationId?: string) {
+    return this.chatbotConfig.getForAdmin(locationId || null);
+  }
+
+  @Get('config/public')
+  @ApiOperation({ summary: 'Kiosk: lightweight config resolved for its location' })
+  getPublicConfig(@Query('locationId') locationId?: string) {
+    return this.chatbotConfig.getPublic(locationId || null);
+  }
+
+  @Put('config')
+  @ApiOperation({ summary: 'CMS: save the chatbot config for a location (or global)' })
+  saveConfig(
+    @Body() dto: UpdateChatbotConfigDto,
+    @Query('locationId') locationId?: string,
+    @Headers('x-actor-name') actorName?: string,
+  ) {
+    return this.chatbotConfig.update(dto, locationId || null, decodeName(actorName));
+  }
+
+  @Delete('config')
+  @ApiOperation({ summary: 'CMS: remove a location override (revert to global)' })
+  resetConfig(@Query('locationId') locationId: string) {
+    return this.chatbotConfig.resetLocation(locationId);
   }
 }
 

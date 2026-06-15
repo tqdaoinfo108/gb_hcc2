@@ -32,7 +32,9 @@ export function HomeScreen({ lang, onLangChange, onSelect, onHelp, onHome, locat
       .catch(() => setServices(null)); // fall back to static cards on error
   }, [locationId]);
 
-  /* If API has returned data use it; otherwise fall back to hardcoded SERVICE_CARDS */
+  /* If the API returned a non-empty set use it; otherwise (loading error OR an
+   * empty/misconfigured result) fall back to the hardcoded SERVICE_CARDS so the
+   * kiosk never shows a blank "Chọn dịch vụ" screen. */
   const cards: Array<{
     id: string;
     label: string;
@@ -42,7 +44,7 @@ export function HomeScreen({ lang, onLangChange, onSelect, onHelp, onHome, locat
     bg: string;
     badge: string | null;
     screenId: string;
-  }> = services
+  }> = services && services.length > 0
     ? services.map(svc => {
         const fallback = STATIC_MAP[svc.screenId as ServiceId];
         return {
@@ -67,8 +69,8 @@ export function HomeScreen({ lang, onLangChange, onSelect, onHelp, onHome, locat
         screenId: s.id,
       }));
 
-  /* Dynamic grid: ≤3 cols, max 2 rows */
-  const cols = Math.min(cards.length, 3);
+  /* Dynamic grid: ≤3 cols, max 2 rows (never 0 → avoids an empty/broken grid) */
+  const cols = Math.max(1, Math.min(cards.length, 3));
 
   return (
     <div style={{ width: 1920, height: 1080, display: "flex", flexDirection: "column", background: "var(--ink-8)" }}>

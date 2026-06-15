@@ -178,6 +178,51 @@ export const deviceApi = {
     }),
 };
 
+export interface OtaCheckResult {
+  updateAvailable: boolean;
+  release?: {
+    id: string;
+    version: string;
+    notes: string | null;
+    mandatory: boolean;
+    fileName: string | null;
+    fileSize: number | null;
+    sha256: string | null;
+    downloadUrl: string;
+  };
+}
+
+export const otaApi = {
+  /** Ask the backend whether an update applies to this device. */
+  check: (deviceId: string, version: string) =>
+    apiRequest<OtaCheckResult>(`/ota/check?deviceId=${encodeURIComponent(deviceId)}&version=${encodeURIComponent(version)}`),
+  /** Report download/install progress and outcome. */
+  report: (body: {
+    deviceId: string;
+    releaseId: string;
+    status: "DOWNLOADING" | "DOWNLOADED" | "INSTALLING" | "INSTALLED" | "FAILED";
+    progress?: number;
+    error?: string;
+    version?: string;
+  }) => apiRequest<{ ok: boolean }>("/ota/report", { method: "POST", body: JSON.stringify(body) }),
+  /** Absolute download URL for a release package (Tauri installer fetches this). */
+  downloadUrl: (path: string) => `${apiUrl}${path}`,
+};
+
+export const remoteApi = {
+  /** Report the outcome of a remote command back to the monitoring backend. */
+  ack: (body: {
+    actionId: string;
+    status: "SUCCESS" | "FAILED" | "UNSUPPORTED";
+    result?: string;
+    artifact?: string;
+  }) =>
+    apiRequest<{ ok: boolean }>("/remote/ack", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
+
 export const feedbackApi = {
   submit: (body: {
     sessionId: string;
@@ -193,6 +238,49 @@ export const feedbackApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+};
+
+/* ── AI assistant (citizen chatbot) ──────────────────────── */
+export interface AiPublicConfig {
+  enabled: boolean;
+  welcomeMessage: string;
+  suggestedQuestions: string[];
+}
+export interface AiChatAction {
+  type: string;
+  label: string;
+  procedure_id?: string;
+  workflow_id?: string;
+}
+export interface AiProcedureCard {
+  procedure_id: string;
+  workflow_id: string | null;
+  code: string;
+  name: string;
+  description: string | null;
+  agency: string | null;
+  processingTime: string;
+  fee: string;
+  documents: { name: string; required: boolean; note?: string }[];
+  notes: string | null;
+  online: boolean;
+}
+export interface AiChatResult {
+  conversationId: string;
+  message: string;
+  intent: string;
+  confidence: number;
+  procedure: { procedure_id: string; name: string } | null;
+  procedures: AiProcedureCard[];
+  actions: AiChatAction[];
+}
+export const aiApi = {
+  /** Welcome message + suggested questions for this device's location. */
+  getConfig: (locationId?: string) =>
+    apiRequest<AiPublicConfig>(`/ai/config/public${locationId ? `?locationId=${encodeURIComponent(locationId)}` : ""}`),
+  /** Send a citizen message → assistant reply + action chips (uses the CMS-configured prompt). */
+  chat: (body: { kioskSessionId: string; message: string; citizenId?: string; language?: string; locationId?: string }) =>
+    apiRequest<AiChatResult>("/ai/chat", { method: "POST", body: JSON.stringify(body) }),
 };
 
 export const queueApi = {

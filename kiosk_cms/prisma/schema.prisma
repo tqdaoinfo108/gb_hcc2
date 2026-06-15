@@ -31,7 +31,8 @@ model KioskLocation {
   updatedAt  DateTime  @updatedAt
   deletedAt  DateTime?
 
-  devices    KioskDevice[]
+  devices     KioskDevice[]
+  otaReleases OtaRelease[]
 
   @@map("kiosk_locations")
 }
@@ -53,6 +54,7 @@ model KioskDevice {
   status          KioskDeviceStatus @default(OFFLINE)
   lastHeartbeat   DateTime?
   installedAt     DateTime?
+  appVersion         String?
   metadata        Json?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
@@ -65,6 +67,7 @@ model KioskDevice {
   actions      KioskAction[]
   queueTickets QueueTicket[]
   statistics   KioskStatistic[]
+  otaUpdates   OtaUpdate[]
 
   @@index([locationId])
   @@index([status])
@@ -1638,4 +1641,90 @@ enum AIJobType {
   TRANSLATION
   SENTIMENT_ANALYSIS
   SUMMARY
+}
+
+// ════════════════════════════════════════════════════
+// MODULE — OTA UPDATE MANAGEMENT
+// ════════════════════════════════════════════════════
+
+enum OtaChannel {
+  STABLE
+  BETA
+}
+
+enum OtaReleaseStatus {
+  DRAFT
+  ROLLING
+  PAUSED
+  COMPLETED
+  ROLLED_BACK
+}
+
+model OtaRelease {
+  id             String           @id @default(uuid())
+  version        String
+  channel        OtaChannel       @default(STABLE)
+  notes          String?
+  isMandatory    Boolean          @default(false)
+  rolloutPercent Int              @default(100)
+  status         OtaReleaseStatus @default(DRAFT)
+  scheduledAt    DateTime?
+  autoRollback   Boolean          @default(true)
+  failureThreshold Int            @default(20)
+  targetLocationId String?
+
+  fileName       String?
+  filePath       String?
+  fileSize       Int?
+  sha256         String?
+  signature      String?
+
+  createdById    String?
+  createdByName  String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  deletedAt      DateTime?
+
+  targetLocation KioskLocation? @relation(fields: [targetLocationId], references: [id])
+  updates        OtaUpdate[]
+
+  @@index([status])
+  @@index([channel])
+  @@map("ota_releases")
+}
+
+enum OtaUpdateStatus {
+  PENDING
+  NOTIFIED
+  DOWNLOADING
+  DOWNLOADED
+  INSTALLING
+  INSTALLED
+  FAILED
+  ROLLED_BACK
+}
+
+model OtaUpdate {
+  id          String          @id @default(uuid())
+  deviceId    String
+  releaseId   String
+  status      OtaUpdateStatus @default(PENDING)
+  fromVersion String?
+  toVersion   String?
+  progress    Int             @default(0)
+  attempts    Int             @default(0)
+  error       String?
+  notifiedAt  DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  device  KioskDevice @relation(fields: [deviceId], references: [id])
+  release OtaRelease  @relation(fields: [releaseId], references: [id])
+
+  @@unique([deviceId, releaseId])
+  @@index([releaseId])
+  @@index([status])
+  @@map("ota_updates")
 }

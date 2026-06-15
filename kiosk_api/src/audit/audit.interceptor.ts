@@ -16,6 +16,7 @@ const SKIP = [
   /\/selenium\/runners\/register/,
   /\/auth\/login/,
   /\/kiosk\/home-services\?/, // GETs excluded already; guard anyway
+  /\/remote\/ack/,            // device-posted command results, not an admin action
 ];
 
 /** Map a request path to a coarse module key (matches CMS nav modules). */
@@ -33,6 +34,9 @@ function moduleOf(path: string): string {
   if (seg[0] === 'feedback') return 'feedback';
   if (seg[0] === 'applications') return 'applications';
   if (seg[0] === 'citizens') return 'citizens';
+  if (seg[0] === 'remote') return 'remote_debug';
+  if (seg[0] === 'ota') return 'ota';
+  if (seg[0] === 'ai' || seg[0] === 'ai-runners') return 'ai';
   return seg[0] || 'system';
 }
 
@@ -53,6 +57,10 @@ export class AuditInterceptor implements NestInterceptor {
 
     const headers = req.headers || {};
     const actorId = (headers['x-actor-id'] as string) || null;
+    // Only audit CMS ADMIN actions (which carry an actor header). Citizen/kiosk
+    // runtime traffic (sessions, tickets, submissions…) has no actor → not noise
+    // in the management audit log.
+    if (!actorId) return next.handle();
     const actorNameRaw = (headers['x-actor-name'] as string) || null;
     const actorName = actorNameRaw ? safeDecode(actorNameRaw) : null;
     const locationId = (headers['x-location-id'] as string) || null;
@@ -97,7 +105,7 @@ function compact(body: unknown): Record<string, unknown> | undefined {
   if (!body || typeof body !== 'object') return undefined;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(body as Record<string, unknown>)) {
-    if (/password|token|b64|data|secret/i.test(k)) { out[k] = '«hidden»'; continue; }
+    if (/password|token|b64|data|secret|authkey/i.test(k)) { out[k] = '«hidden»'; continue; }
     if (typeof v === 'string' && v.length > 200) { out[k] = v.slice(0, 200) + '…'; continue; }
     out[k] = v;
   }

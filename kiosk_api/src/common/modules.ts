@@ -11,7 +11,7 @@ export const MODULES: ModuleDef[] = [
   { key: 'home_services', label: 'Màn hình Home',     group: 'Kiosk' },
   { key: 'devices',     label: 'Thiết bị',           group: 'Kiosk' },
   { key: 'ota',         label: 'OTA / Tích hợp',     group: 'Kiosk' },
-  { key: 'remote_debug', label: 'Phiên / Remote',    group: 'Kiosk' },
+  { key: 'remote_debug', label: 'Điều khiển từ xa',  group: 'Kiosk' },
   { key: 'queue',       label: 'Hàng đợi',           group: 'Hàng đợi' },
   { key: 'applications', label: 'Hồ sơ',             group: 'Dịch vụ công' },
   { key: 'procedures',  label: 'Thủ tục & Danh mục', group: 'Dịch vụ công' },

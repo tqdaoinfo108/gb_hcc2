@@ -76,6 +76,7 @@ export function HomeServicesClient({ initialServices, locationId = null }: { ini
       setServices(data);
     } catch (err) {
       console.error(err);
+      showToast(`Không tải lại được danh sách (API: ${API_URL}). Kiểm tra kết nối tới máy chủ.`);
     }
   }
 

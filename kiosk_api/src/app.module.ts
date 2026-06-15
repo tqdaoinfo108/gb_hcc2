@@ -29,6 +29,8 @@ import { AIWorkerModule } from './modules/ai-worker/ai-worker.module';
 import { AiGatewayModule } from './modules/ai-gateway/ai-gateway.module';
 import { WorkflowModule } from './modules/workflow/workflow.module';
 import { CopyDocModule } from './modules/copy-doc/copy-doc.module';
+import { RemoteModule } from './modules/remote/remote.module';
+import { OtaModule } from './ota/ota.module';
 
 @Module({
   imports: [
@@ -56,6 +58,8 @@ import { CopyDocModule } from './modules/copy-doc/copy-doc.module';
     WorkflowModule,
     AiGatewayModule,
     CopyDocModule,
+    RemoteModule,
+    OtaModule,
   ],
   controllers: [HealthController, AuthController],
   providers: [

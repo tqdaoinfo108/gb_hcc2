@@ -166,6 +166,64 @@ function getEffectiveDeviceStatus(device: { isEnabled: boolean; status: string; 
   return device.status;
 }
 
+/* ── Remote Debug / Device Management ──────────────── */
+const ONLINE_WINDOW_MS = 60_000;
+
+/** Devices shaped for the remote-debug console, scoped by location.
+ *  Mirrors the API's /remote/devices response so the client can patch
+ *  entries from live socket events without reshaping. */
+export async function getRemoteDevices(scope: string[] | null = null) {
+  const devices = await prisma.kioskDevice.findMany({
+    where: { deletedAt: null, ...locFilter(scope) },
+    include: {
+      location: { select: { id: true, name: true, code: true } },
+      components: { where: { deletedAt: null }, orderBy: { type: "asc" } },
+      healthLogs: { orderBy: { createdAt: "desc" }, take: 1 },
+    },
+    orderBy: [{ isEnabled: "desc" }, { lastHeartbeat: "desc" }],
+  });
+  return devices.map((d) => {
+    const lastBeat = d.lastHeartbeat ? new Date(d.lastHeartbeat).getTime() : 0;
+    const online = lastBeat > 0 && Date.now() - lastBeat < ONLINE_WINDOW_MS;
+    const latest = d.healthLogs[0];
+    return {
+      id: d.id,
+      deviceId: d.deviceId,
+      serialNumber: d.serialNumber,
+      name: d.name,
+      placement: d.placement,
+      isEnabled: d.isEnabled,
+      status: !d.isEnabled ? "MAINTENANCE" : online ? "ONLINE" : "OFFLINE",
+      online,
+      maintenanceMessage: d.maintenanceMessage,
+      model: d.model,
+      firmwareVersion: d.firmwareVersion,
+      appVersion: latest?.appVersion ?? null,
+      ipAddress: d.ipAddress,
+      macAddress: d.macAddress,
+      lastHeartbeat: d.lastHeartbeat ? d.lastHeartbeat.toISOString() : null,
+      location: d.location,
+      metrics: latest
+        ? {
+            cpu: latest.cpuUsage,
+            memory: latest.memoryUsage,
+            disk: latest.diskUsage,
+            temperature: latest.temperatureC,
+            latency: latest.networkLatency,
+            currentScreen: latest.currentScreen,
+            at: latest.createdAt.toISOString(),
+          }
+        : null,
+      components: d.components.map((c) => ({
+        type: c.type,
+        name: c.name,
+        status: c.status,
+        lastChecked: c.lastChecked ? c.lastChecked.toISOString() : null,
+      })),
+    };
+  });
+}
+
 /* ── Applications ──────────────────────────────────── */
 export async function getApplications(status?: ApplicationStatus) {
   return prisma.application.findMany({

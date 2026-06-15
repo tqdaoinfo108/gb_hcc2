@@ -1,8 +1,9 @@
 "use client";
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { TopBar, PageHeader } from "../ui";
 import { AssistantAvatar } from "../illustrations";
 import { Icon } from "../icons";
+import { aiApi, AiProcedureCard, AiChatAction } from "../../lib/api";
 
 interface Props {
   lang: "vi" | "en";
@@ -10,58 +11,169 @@ interface Props {
   onBack: () => void;
   onHome: () => void;
   onHelp: () => void;
+  sessionId?: string;
+  locationId?: string;
+  deviceId?: string;
+  /** Start the configured online submission workflow for a procedure. */
+  onStartProcedure?: (procedureId: string, online: boolean, name: string) => void;
+  /** Jump to the copy-document (sao y) flow. */
+  onStartCopyDoc?: () => void;
 }
 
-type Msg = { from: "ai" | "user"; text: string };
+type Msg = { from: "ai" | "user"; text: string; procedures?: AiProcedureCard[]; actions?: AiChatAction[] };
 
-const CHIPS = [
+const FALLBACK_CHIPS = [
   "Thủ tục đăng ký khai sinh?",
   "Cách nộp hồ sơ cấp CCCD?",
   "Thời gian xử lý hồ sơ?",
   "Quầy giải quyết hộ tịch?",
 ];
 
-const QA: Record<string, string> = {
-  "Thủ tục đăng ký khai sinh?": "Để đăng ký khai sinh, bạn cần mang theo CCCD của cha mẹ, giấy chứng sinh của bệnh viện. Thủ tục miễn phí, thời gian 3 ngày làm việc.",
-  "Cách nộp hồ sơ cấp CCCD?": "Để cấp CCCD, bạn chọn 'Nộp hồ sơ' trên màn hình chính, xác thực bằng VNeID, điền thông tin và nộp hồ sơ. Thời gian xử lý 7 ngày.",
-  "Thời gian xử lý hồ sơ?": "Thời gian xử lý tùy theo loại hồ sơ: hộ tịch 3 ngày, CCCD 7 ngày, chứng thực 1 ngày. Tra cứu tiến độ qua mã biên nhận.",
-  "Quầy giải quyết hộ tịch?": "Hồ sơ hộ tịch được giải quyết tại Quầy số 01 và 02, thứ Hai đến Thứ Sáu, 7:30-17:00. Thứ Bảy 7:30-11:30.",
-};
+const DEFAULT_WELCOME = "Xin chào! Tôi là Trợ lý Dịch vụ Công. Tôi có thể giúp bạn tra cứu thủ tục, hướng dẫn nộp hồ sơ và giải đáp mọi thắc mắc. Bạn cần hỗ trợ gì?";
 
-const INIT: Msg[] = [
-  { from: "ai", text: "Xin chào! Tôi là Trợ lý Dịch vụ Công. Tôi có thể giúp bạn tra cứu thủ tục, hướng dẫn nộp hồ sơ và giải đáp mọi thắc mắc. Bạn cần hỗ trợ gì?" },
-];
-
-export function AIScreen({ lang, onLangChange, onBack, onHome, onHelp }: Props) {
-  const [msgs, setMsgs] = useState<Msg[]>(INIT);
+export function AIScreen({ lang, onLangChange, onBack, onHome, onHelp, sessionId, locationId, deviceId, onStartProcedure, onStartCopyDoc }: Props) {
+  const [msgs, setMsgs] = useState<Msg[]>([{ from: "ai", text: DEFAULT_WELCOME }]);
+  const [chips, setChips] = useState<string[]>(FALLBACK_CHIPS);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
   const [typing, setTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<{ stop: () => void } | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs, typing]);
 
-  function sendMsg(text: string) {
-    if (!text.trim()) return;
+  // Pull the CMS-configured welcome message + suggested questions for this location.
+  useEffect(() => {
+    let alive = true;
+    aiApi.getConfig(locationId).then(cfg => {
+      if (!alive) return;
+      if (cfg.welcomeMessage) setMsgs([{ from: "ai", text: cfg.welcomeMessage }]);
+      if (cfg.suggestedQuestions?.length) setChips(cfg.suggestedQuestions);
+    }).catch(() => { /* keep defaults if the API is unreachable */ });
+    return () => { alive = false; };
+  }, [locationId]);
+
+  const sendMsg = useCallback(async (text: string) => {
+    if (!text.trim() || typing) return;
     setMsgs(p => [...p, { from: "user", text }]);
     setInput("");
     setTyping(true);
-    setTimeout(() => {
-      const reply = QA[text] ?? "Cảm ơn câu hỏi của bạn. Để được hỗ trợ chi tiết hơn, vui lòng liên hệ nhân viên tại quầy hoặc gọi hotline 1900 6017.";
+    try {
+      const res = await aiApi.chat({
+        kioskSessionId: sessionId ?? `ai-${deviceId ?? "kiosk"}`,
+        message: text,
+        language: lang,
+        locationId,
+      });
+      setMsgs(p => [...p, { from: "ai", text: res.message, procedures: res.procedures, actions: res.actions }]);
+    } catch {
+      setMsgs(p => [...p, { from: "ai", text: "Xin lỗi, tôi chưa kết nối được với hệ thống. Quý khách vui lòng thử lại hoặc nhờ cán bộ tại quầy hỗ trợ." }]);
+    } finally {
       setTyping(false);
-      setMsgs(p => [...p, { from: "ai", text: reply }]);
-    }, 1200);
-  }
-
-  function toggleMic() {
-    setListening(p => !p);
-    if (listening) {
-      setListening(false);
-      sendMsg("Thủ tục đăng ký khai sinh?");
     }
-  }
+  }, [typing, sessionId, deviceId, locationId, lang]);
+
+  // Dispatch an action chip returned by the assistant.
+  const runAction = useCallback((a: AiChatAction, card?: AiProcedureCard) => {
+    switch (a.type) {
+      case "START_WORKFLOW":
+      case "OPEN_PROCEDURE":
+      case "VIEW_REQUIREMENTS": {
+        const id = a.procedure_id ?? card?.procedure_id;
+        const c = card ?? undefined;
+        if (id && onStartProcedure) onStartProcedure(id, c?.online ?? true, c?.name ?? "");
+        break;
+      }
+      case "START_COPYDOC":
+        onStartCopyDoc?.();
+        break;
+      case "SEARCH_PROCEDURE":
+        void sendMsg("Tôi muốn tra cứu thủ tục hành chính");
+        break;
+      case "HUMAN_HELP":
+        onHelp();
+        break;
+    }
+  }, [onStartProcedure, onStartCopyDoc, onHelp, sendMsg]);
+
+  // Native Vosk STT (Tauri) — the Web Speech API doesn't run in WebView2. In a
+  // plain browser (dev) we fall back to webkitSpeechRecognition. Vietnamese is the
+  // default in both paths. A single in-flight session prevents overlapping audio.
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const unlistenRef = useRef<Array<() => void>>([]);
+  const clearListeners = useCallback(() => { unlistenRef.current.forEach(u => u()); unlistenRef.current = []; }, []);
+
+  const stopVoice = useCallback(async () => {
+    setListening(false);
+    if (isTauri) {
+      try { const { invoke } = await import("@tauri-apps/api/core"); await invoke("voice_stop"); } catch { /* ignore */ }
+      clearListeners();
+    } else {
+      recognitionRef.current?.stop();
+    }
+  }, [isTauri, clearListeners]);
+
+  const startVoice = useCallback(async () => {
+    setInput("");
+    setListening(true);
+    if (isTauri) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const { listen } = await import("@tauri-apps/api/event");
+        const unPartial = await listen<string>("voice:partial", e => setInput(e.payload));
+        const unFinal = await listen<string>("voice:final", e => { clearListeners(); setListening(false); void sendMsg(e.payload); });
+        const unEnded = await listen("voice:ended", () => { clearListeners(); setListening(false); });
+        const unErr = await listen<string>("voice:error", e => {
+          clearListeners(); setListening(false);
+          setMsgs(p => [...p, { from: "ai", text: e.payload || "Chưa nhận dạng được giọng nói. Quý khách vui lòng gõ câu hỏi nhé." }]);
+        });
+        unlistenRef.current = [unPartial, unFinal, unEnded, unErr];
+        await invoke("voice_start"); // throws if the `voice` feature isn't built
+      } catch (err) {
+        clearListeners(); setListening(false);
+        setMsgs(p => [...p, { from: "ai", text: typeof err === "string" ? err : "Thiết bị chưa hỗ trợ nhập bằng giọng nói. Quý khách vui lòng gõ câu hỏi nhé." }]);
+      }
+      return;
+    }
+    // Browser dev fallback
+    const w = window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any };
+    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!SR) {
+      setListening(false);
+      setMsgs(p => [...p, { from: "ai", text: "Thiết bị chưa hỗ trợ nhập bằng giọng nói. Quý khách vui lòng gõ câu hỏi nhé." }]);
+      return;
+    }
+    const rec = new SR();
+    rec.lang = "vi-VN";
+    rec.interimResults = true;
+    rec.continuous = false;
+    recognitionRef.current = rec;
+    rec.onresult = (e: any) => {
+      const transcript = Array.from(e.results).map((r: any) => r[0].transcript).join("");
+      setInput(transcript);
+      if (e.results[e.results.length - 1].isFinal) { setListening(false); void sendMsg(transcript); }
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => setListening(false);
+    rec.start();
+  }, [isTauri, clearListeners, sendMsg]);
+
+  // Single toggle; ignores re-entry while a session is starting/stopping.
+  const togglingRef = useRef(false);
+  const toggleMic = useCallback(async () => {
+    if (togglingRef.current) return;
+    togglingRef.current = true;
+    try {
+      if (listening) await stopVoice();
+      else await startVoice();
+    } finally {
+      togglingRef.current = false;
+    }
+  }, [listening, startVoice, stopVoice]);
+
+  useEffect(() => () => { void stopVoice(); }, [stopVoice]);
 
   return (
     <div style={{ width: 1920, height: 1080, display: "flex", flexDirection: "column", background: "var(--ink-8)" }}>
@@ -91,17 +203,47 @@ export function AIScreen({ lang, onLangChange, onBack, onHome, onHelp }: Props) 
           {/* Messages */}
           <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px", display: "flex", flexDirection: "column", gap: 16 }}>
             {msgs.map((m, i) => (
-              <div key={i} style={{ display: "flex", gap: 12, alignSelf: m.from === "ai" ? "flex-start" : "flex-end", maxWidth: "70%" }}>
+              <div key={i} style={{ display: "flex", gap: 12, alignSelf: m.from === "ai" ? "flex-start" : "flex-end", maxWidth: m.from === "ai" ? "82%" : "70%" }}>
                 {m.from === "ai" && <AssistantAvatar size={36} />}
-                <div style={{
-                  padding: "14px 18px", borderRadius: m.from === "ai" ? "4px 18px 18px 18px" : "18px 4px 18px 18px",
-                  background: m.from === "ai" ? "#fff" : "var(--purple)",
-                  color: m.from === "ai" ? "var(--ink-1)" : "#fff",
-                  fontSize: 16, lineHeight: 1.6,
-                  boxShadow: "var(--shadow-sm)",
-                  border: m.from === "ai" ? "1px solid var(--ink-7)" : "none",
-                }}>
-                  {m.text}
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+                  <div style={{
+                    padding: "14px 18px", borderRadius: m.from === "ai" ? "4px 18px 18px 18px" : "18px 4px 18px 18px",
+                    background: m.from === "ai" ? "#fff" : "var(--purple)",
+                    color: m.from === "ai" ? "var(--ink-1)" : "#fff",
+                    fontSize: 16, lineHeight: 1.6,
+                    boxShadow: "var(--shadow-sm)",
+                    border: m.from === "ai" ? "1px solid var(--ink-7)" : "none",
+                    alignSelf: m.from === "ai" ? "flex-start" : "flex-end",
+                    whiteSpace: "pre-wrap",
+                  }}>
+                    {m.text}
+                  </div>
+
+                  {/* Procedure recommendation cards (from CMS data) */}
+                  {m.procedures?.map(p => (
+                    <ProcedureRecCard key={p.procedure_id} card={p} onStart={() => onStartProcedure?.(p.procedure_id, p.online, p.name)} />
+                  ))}
+
+                  {/* Action chips */}
+                  {m.actions && m.actions.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {m.actions.map((a, ai) => {
+                        const card = m.procedures?.find(p => p.procedure_id === a.procedure_id) ?? m.procedures?.[0];
+                        const primary = a.type === "START_WORKFLOW" || a.type === "OPEN_PROCEDURE" || a.type === "START_COPYDOC";
+                        return (
+                          <button key={ai} onClick={() => runAction(a, card)}
+                            style={{
+                              padding: "10px 16px", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer",
+                              border: primary ? "none" : "1.5px solid var(--ink-7)",
+                              background: primary ? "var(--purple)" : "#fff",
+                              color: primary ? "#fff" : "var(--ink-2)",
+                            }}>
+                            {a.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -139,7 +281,7 @@ export function AIScreen({ lang, onLangChange, onBack, onHome, onHelp }: Props) 
               />
             </div>
             <button
-              onClick={toggleMic}
+              onClick={() => void toggleMic()}
               style={{
                 width: 56, height: 56, borderRadius: "50%",
                 background: listening ? "var(--orange)" : "var(--ink-8)",
@@ -177,7 +319,7 @@ export function AIScreen({ lang, onLangChange, onBack, onHome, onHelp }: Props) 
         {/* Suggestion chips */}
         <div style={{ width: 380, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink-2)", marginBottom: 4 }}>Câu hỏi thường gặp</div>
-          {CHIPS.map(c => (
+          {chips.map(c => (
             <button
               key={c}
               onClick={() => sendMsg(c)}
@@ -197,6 +339,53 @@ export function AIScreen({ lang, onLangChange, onBack, onHome, onHelp }: Props) 
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Procedure recommendation card (structured CMS data) ─────── */
+function ProcedureRecCard({ card, onStart }: { card: AiProcedureCard; onStart: () => void }) {
+  return (
+    <div style={{
+      background: "#fff", border: "1.5px solid var(--ink-7)", borderRadius: 16,
+      padding: "16px 18px", boxShadow: "var(--shadow-sm)", maxWidth: 560,
+    }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: "var(--ink-0)", lineHeight: 1.4 }}>{card.name}</div>
+        <span style={{
+          flexShrink: 0, fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 999,
+          background: card.online ? "var(--green-lt, #dcfce7)" : "var(--ink-8)",
+          color: card.online ? "var(--green, #15803d)" : "var(--ink-4)",
+        }}>{card.online ? "Nộp trực tuyến" : "Tại quầy"}</span>
+      </div>
+      {card.description && <div style={{ marginTop: 6, fontSize: 14, color: "var(--ink-4)", lineHeight: 1.5 }}>{card.description}</div>}
+
+      <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: "8px 20px", fontSize: 13.5, color: "var(--ink-3)" }}>
+        <span>🕒 {card.processingTime}</span>
+        <span>💰 {card.fee}</span>
+        {card.agency && <span>🏛️ {card.agency}</span>}
+      </div>
+
+      {card.documents.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--ink-2)", marginBottom: 6 }}>Giấy tờ cần chuẩn bị</div>
+          <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
+            {card.documents.slice(0, 6).map((d, i) => (
+              <li key={i} style={{ fontSize: 13.5, color: "var(--ink-3)", lineHeight: 1.5 }}>
+                {d.name}{!d.required && <span style={{ color: "var(--ink-5)" }}> (không bắt buộc)</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {card.online && (
+        <button onClick={onStart}
+          className="btn btn-primary"
+          style={{ marginTop: 14, width: "100%", padding: "12px 0", borderRadius: 12, fontSize: 15, fontWeight: 800 }}>
+          Nộp hồ sơ ngay
+        </button>
+      )}
     </div>
   );
 }

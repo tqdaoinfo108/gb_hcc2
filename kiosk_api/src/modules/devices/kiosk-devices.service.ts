@@ -75,6 +75,7 @@ export class KioskDevicesService {
           model: health.model?.trim() || device.model,
           firmwareVersion: health.firmwareVersion?.trim() || device.firmwareVersion,
           macAddress: health.macAddress?.trim() || device.macAddress,
+          appVersion: health.appVersion?.trim() || device.appVersion,
           metadata: metadata as Prisma.InputJsonValue,
         },
         include: { location: true },
@@ -101,6 +102,29 @@ export class KioskDevicesService {
         },
       });
       return current;
+    });
+
+    // Push a live health snapshot to the CMS so the remote-debug console and
+    // dashboards update without polling.
+    this.realtime.emitToCms('device:health', {
+      id: updated.id,
+      deviceId: updated.deviceId,
+      serialNumber: updated.serialNumber,
+      locationId: updated.locationId,
+      status,
+      online: status === KioskDeviceStatus.ONLINE,
+      lastHeartbeat: new Date().toISOString(),
+      appVersion: health.appVersion ?? null,
+      ipAddress: ipAddress ?? updated.ipAddress ?? null,
+      metrics: {
+        cpu: health.cpuUsage ?? null,
+        memory: health.memoryUsage ?? null,
+        disk: health.diskUsage ?? null,
+        temperature: health.temperatureC ?? null,
+        latency: health.networkLatency ?? null,
+        currentScreen: health.currentScreen ?? null,
+      },
+      components: health.components ?? null,
     });
 
     return this.toRuntimeConfig(updated);

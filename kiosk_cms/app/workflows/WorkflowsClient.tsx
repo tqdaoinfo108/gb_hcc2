@@ -3,6 +3,7 @@
 import { useState, useTransition, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { RecorderModal } from "./RecorderModal";
+import { auditHeaders } from "../lib/audit-headers";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
@@ -122,7 +123,7 @@ function fieldsFor(stepType: string) {
 async function api(path: string, method: string, body?: unknown) {
   const res = await fetch(`${API_URL}${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auditHeaders() },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {

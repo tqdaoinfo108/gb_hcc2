@@ -34,6 +34,8 @@ model KioskLocation {
   homeServices     KioskHomeService[]
   queueServices    QueueService[]
   copyDocCategories CopyDocCategory[]
+  otaReleases      OtaRelease[]
+  chatbotConfigs   ChatbotConfig[]
 
   @@map("kiosk_locations")
 }
@@ -55,6 +57,7 @@ model KioskDevice {
   status          KioskDeviceStatus @default(OFFLINE)
   lastHeartbeat   DateTime?
   installedAt     DateTime?
+  appVersion         String?        // last reported running app version (OTA tracking)
   metadata        Json?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
@@ -67,6 +70,7 @@ model KioskDevice {
   actions      KioskAction[]
   queueTickets QueueTicket[]
   statistics   KioskStatistic[]
+  otaUpdates   OtaUpdate[]
 
   @@index([locationId])
   @@index([status])
@@ -1853,6 +1857,29 @@ model AiRunnerHealthLog {
   @@map("ai_runner_health_logs")
 }
 
+/// Singleton config for the citizen-facing AI chatbot: the admin-editable system
+/// prompt (procedure guidance), conversational defaults, and the preferred runner.
+model ChatbotConfig {
+  id                     String   @id @default(uuid())
+  locationId             String?  @unique               // null = global default; per-location overrides it
+  enabled                Boolean  @default(true)
+  systemPrompt           String                       // detailed VN gov-procedure guidance prompt
+  welcomeMessage         String?                      // greeting shown when the kiosk chat opens
+  fallbackMessage        String?                      // shown when no runner can answer
+  temperature            Float    @default(0.3)
+  maxTokens              Int      @default(512)
+  suggestedQuestions     String[]                     // quick-start chips for citizens
+  includeProcedureContext Boolean @default(true)      // inject the active-procedure catalog into the prompt
+  primaryRunnerId        String?                      // preferred AI provider; null = auto-route
+  updatedByName          String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  location KioskLocation? @relation(fields: [locationId], references: [id])
+
+  @@map("chatbot_configs")
+}
+
 // ════════════════════════════════════════════════════
 // MODULE 16 — SAO Y (ELECTRONIC DOCUMENT COPY)
 // ════════════════════════════════════════════════════
@@ -2146,4 +2173,93 @@ enum PaymentStatus {
   FAILED
   REFUNDED
   WAIVED
+}
+
+// ════════════════════════════════════════════════════
+// MODULE — OTA UPDATE MANAGEMENT
+// ════════════════════════════════════════════════════
+
+enum OtaChannel {
+  STABLE
+  BETA
+}
+
+enum OtaReleaseStatus {
+  DRAFT        // created, package maybe not uploaded yet — not offered to kiosks
+  ROLLING      // actively offered per rollout rules
+  PAUSED       // temporarily halted (manual or auto-stop on failures)
+  COMPLETED    // rollout finished
+  ROLLED_BACK  // withdrawn; superseded by a previous stable build
+}
+
+/// One application version + its signed update package and rollout policy.
+model OtaRelease {
+  id             String           @id @default(uuid())
+  version        String           // semver, e.g. 1.2.0
+  channel        OtaChannel       @default(STABLE)
+  notes          String?          // release notes shown to operators / citizens
+  isMandatory    Boolean          @default(false)
+  rolloutPercent Int              @default(100) // 0-100 canary percentage
+  status         OtaReleaseStatus @default(DRAFT)
+  scheduledAt    DateTime?        // do not offer before this time
+  autoRollback   Boolean          @default(true)
+  failureThreshold Int            @default(20)  // % failed (of notified) that triggers auto-pause
+  targetLocationId String?          // null = all locations/devices
+
+  // Embedded package (one MSI per release for the Windows kiosk fleet).
+  fileName       String?
+  filePath       String?          // absolute path under uploads/ota
+  fileSize       Int?
+  sha256         String?
+  signature      String?          // optional code-signing signature / hash
+
+  createdById    String?
+  createdByName  String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  deletedAt      DateTime?
+
+  targetLocation KioskLocation? @relation(fields: [targetLocationId], references: [id])
+  updates        OtaUpdate[]
+
+  @@index([status])
+  @@index([channel])
+  @@map("ota_releases")
+}
+
+enum OtaUpdateStatus {
+  PENDING      // applies to device, not yet notified
+  NOTIFIED     // kiosk has been told an update is available
+  DOWNLOADING
+  DOWNLOADED   // package fetched + checksum verified
+  INSTALLING
+  INSTALLED    // success, device now on the new version
+  FAILED
+  ROLLED_BACK
+}
+
+/// Per-device record of a release rollout — the kiosk_updates / release history.
+model OtaUpdate {
+  id          String          @id @default(uuid())
+  deviceId    String
+  releaseId   String
+  status      OtaUpdateStatus @default(PENDING)
+  fromVersion String?
+  toVersion   String?
+  progress    Int             @default(0) // 0-100 download/install progress
+  attempts    Int             @default(0)
+  error       String?
+  notifiedAt  DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  device  KioskDevice @relation(fields: [deviceId], references: [id])
+  release OtaRelease  @relation(fields: [releaseId], references: [id])
+
+  @@unique([deviceId, releaseId])
+  @@index([releaseId])
+  @@index([status])
+  @@map("ota_updates")
 }
