@@ -8,12 +8,10 @@
     "start": "next start --hostname 127.0.0.1 --port 3000",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build --bundles msi",
-    "tauri:build:debug": "tauri build --debug --bundles msi",
-    "automation": "tsx automation/automation-service.ts"
+    "tauri:build:debug": "tauri build --debug --bundles msi"
   },
   "dependencies": {
     "@prisma/client": "^6.9.0",
-    "@smart-kiosk/shared-types": "file:../packages/shared-types",
     "@tauri-apps/api": "^2.5.0",
     "dotenv": "^16.5.0",
     "next": "^15.3.3",

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { AdminAuditLog, Prisma } from '@prisma/client';
+import { PaginatedResult } from '../common/base.dto';
 import { PrismaService } from '../prisma.service';
 
 @Injectable()
@@ -48,16 +49,43 @@ export class AuditService {
   }
 
   /** Paginated audit log query, scoped by location. */
-  async list(params: { locationId?: string | null; module?: string; action?: string; limit?: number }) {
-    const { locationId, module, action, limit = 200 } = params;
-    return this.prisma.adminAuditLog.findMany({
-      where: {
-        ...(locationId === null || locationId === undefined ? {} : { locationId }),
-        ...(module ? { module } : {}),
-        ...(action ? { action } : {}),
-      },
-      orderBy: { createdAt: 'desc' },
-      take: Math.min(limit, 500),
-    });
+  async list(params: {
+    locationId?: string | null;
+    module?: string;
+    action?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<PaginatedResult<AdminAuditLog>> {
+    const { locationId, module, action } = params;
+    const page = clampInt(params.page, 1, 1, 10_000);
+    const limit = clampInt(params.limit, 50, 1, 100);
+    const where: Prisma.AdminAuditLogWhereInput = {
+      ...(locationId === null || locationId === undefined ? {} : { locationId }),
+      ...(module ? { module } : {}),
+      ...(action ? { action } : {}),
+    };
+
+    const [total, data] = await this.prisma.$transaction([
+      this.prisma.adminAuditLog.count({ where }),
+      this.prisma.adminAuditLog.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
+}
+
+function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.trunc(value as number), min), max);
 }

@@ -12,6 +12,7 @@ import { SuccessScreen } from "./components/screens/success";
 import { AIScreen } from "./components/screens/ai";
 import { CopyDocScreen } from "./components/screens/copy-doc";
 import { ProcedureSubmitScreen } from "./components/screens/procedure-submit";
+import { WorkflowRecordScreen } from "./components/screens/workflow-record";
 import { QueueScreen } from "./components/screens/queue";
 import { FeedbackScreen } from "./components/screens/feedback";
 import { LookupScreen } from "./components/screens/lookup";
@@ -122,7 +123,136 @@ const INACTIVITY_MS = 180_000;
 const HEARTBEAT_MS = 15_000;
 const OTA_CHECK_MS = 300_000; // poll for app updates every 5 minutes
 
-export default function KioskRoot() {
+/* Root: `?mode=record` opens the admin Workflow Recorder (authoring) instead of
+ * the citizen kiosk flow. Same Tauri app + same engine — only the UI differs.
+ * The mode is resolved after mount to avoid a static-export hydration mismatch. */
+export default function Root() {
+  const [mode, setMode] = useState<"kiosk" | "record" | null>(null);
+  useEffect(() => {
+    // `?mode=record` (quick override) or a NEXT_PUBLIC_KIOSK_MODE=record build
+    // (dedicated admin/recorder deployment) opens the recorder; default = kiosk.
+    const q = new URLSearchParams(window.location.search).get("mode");
+    const resolved = q ?? process.env.NEXT_PUBLIC_KIOSK_MODE;
+    setMode(resolved === "record" ? "record" : "kiosk");
+  }, []);
+
+  /* ── Hidden admin gesture ──────────────────────────────────
+   * A deployed kiosk ships in citizen mode (no ?mode=record, no rebuild). To
+   * author/capture selectors in the field, an admin flips it into the Workflow
+   * Recorder with a secret unlock that a citizen won't hit by accident:
+   *   • 5 rapid taps in the very top-left corner (≤80px box) within 2s, or
+   *   • Ctrl+Alt+Shift+R on an attached keyboard.
+   * The recorder's own "Về kiosk" button flips back. */
+  useEffect(() => {
+    if (mode !== "kiosk") return;
+    let taps: number[] = [];
+    const onPointer = (e: PointerEvent) => {
+      if (e.clientX > 80 || e.clientY > 80) { taps = []; return; }
+      const now = e.timeStamp;
+      taps = taps.filter((t) => now - t < 2000);
+      taps.push(now);
+      if (taps.length >= 5) { taps = []; setMode("record"); }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.altKey && e.shiftKey && (e.key === "R" || e.key === "r")) {
+        e.preventDefault();
+        setMode("record");
+      }
+    };
+    window.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [mode]);
+
+  if (mode === null) return null;
+  if (mode === "record") {
+    return (
+      <div style={{ width: "100vw", height: "100dvh", overflow: "hidden" }}>
+        <WorkflowRecordScreen onExitRecorder={() => setMode("kiosk")} />
+      </div>
+    );
+  }
+  return <KioskApp />;
+}
+
+const ALL_SCREENS: Screen[] = [
+  "idle", "home", "auth", "profile", "discovery", "checklist",
+  "scan", "review", "success", "ai", "copy-doc", "queue", "feedback", "lookup", "procedure-submit",
+];
+
+/* Dev overlay — Ctrl+Alt+F2 — browser dev only (not Tauri). Lets you jump to any
+ * screen, see current state, and inspect live config without restarting the app. */
+function DevOverlay({
+  screen, deviceSerial, deviceConfig, session, onGoto, onClose,
+}: {
+  screen: Screen;
+  deviceSerial: string | null;
+  deviceConfig: KioskRuntimeConfig | null | undefined;
+  session: KioskSessionData | null;
+  onGoto: (s: Screen) => void;
+  onClose: () => void;
+}) {
+  const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+  const WS = process.env.NEXT_PUBLIC_WS_URL ?? API;
+  const screenColor: Record<Screen, string> = {
+    idle: "#64748b", home: "#2563eb", auth: "#7c3aed", profile: "#7c3aed",
+    discovery: "#0891b2", checklist: "#0891b2", scan: "#0891b2", review: "#0891b2",
+    "procedure-submit": "#dc2626", success: "#16a34a", ai: "#ea580c",
+    "copy-doc": "#ea580c", queue: "#ca8a04", feedback: "#ca8a04", lookup: "#ca8a04",
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(15,23,42,0.85)", display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(4px)" }}
+      onClick={onClose}>
+      <div style={{ background: "#1e293b", borderRadius: 16, border: "1px solid #334155", padding: 24, width: 480, maxHeight: "85vh", overflowY: "auto", color: "#f1f5f9" }}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div>
+            <span style={{ fontFamily: "monospace", fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em" }}>DEV OVERLAY</span>
+            <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>Ctrl+Alt+F2</div>
+          </div>
+          <button onClick={onClose} style={{ background: "#334155", border: "none", color: "#94a3b8", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13 }}>✕ Đóng</button>
+        </div>
+
+        {/* State snapshot */}
+        <div style={{ background: "#0f172a", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 12, fontFamily: "monospace", lineHeight: 1.8 }}>
+          <div><span style={{ color: "#64748b" }}>screen: </span><span style={{ color: screenColor[screen] ?? "#f1f5f9", fontWeight: 700 }}>{screen}</span></div>
+          <div><span style={{ color: "#64748b" }}>serial: </span><span style={{ color: "#94a3b8" }}>{deviceSerial ?? "—"}</span></div>
+          <div><span style={{ color: "#64748b" }}>session: </span><span style={{ color: "#94a3b8" }}>{session?.id?.slice(0, 8) ?? "none"}</span></div>
+          <div><span style={{ color: "#64748b" }}>device: </span><span style={{ color: deviceConfig?.isEnabled ? "#4ade80" : "#f87171" }}>{deviceConfig === undefined ? "loading" : deviceConfig === null ? "offline" : deviceConfig.isEnabled ? "enabled" : "disabled"}</span></div>
+          <div><span style={{ color: "#64748b" }}>api: </span><span style={{ color: "#94a3b8" }}>{API}</span></div>
+          <div><span style={{ color: "#64748b" }}>ws: </span><span style={{ color: "#94a3b8" }}>{WS}</span></div>
+          <div><span style={{ color: "#64748b" }}>version: </span><span style={{ color: "#94a3b8" }}>{process.env.NEXT_PUBLIC_APP_VERSION ?? "1.0.0"}</span></div>
+        </div>
+
+        {/* Screen navigator */}
+        <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8, fontWeight: 700 }}>Chuyển màn hình</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+          {ALL_SCREENS.map(s => (
+            <button key={s} onClick={() => { onGoto(s); onClose(); }}
+              style={{
+                background: s === screen ? (screenColor[s] ?? "#334155") : "#0f172a",
+                border: `1px solid ${s === screen ? (screenColor[s] ?? "#475569") : "#334155"}`,
+                borderRadius: 8, padding: "7px 12px", cursor: "pointer", textAlign: "left",
+                color: s === screen ? "#fff" : "#94a3b8", fontFamily: "monospace", fontSize: 12, fontWeight: s === screen ? 800 : 400,
+                transition: "all 0.15s",
+              }}>
+              {s === screen ? "▶ " : ""}{s}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 16, fontSize: 11, color: "#475569", textAlign: "center" }}>
+          Chỉ hiện trong browser dev (localhost:3000). Không xuất hiện trong Tauri.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KioskApp() {
   /* Serial number loaded from device.json via /api/device (no env var dependency) */
   const [deviceSerial, setDeviceSerial] = useState<string | null>(null);
   const [screen, setScreen] = useState<Screen>("idle");
@@ -276,6 +406,26 @@ export default function KioskRoot() {
    * otherwise the verified package is left ready and the step is logged.
    * A checksum mismatch or download error is a real FAILED (counts toward the
    * rollout's auto-stop threshold). */
+  const [showDev, setShowDev] = useState(false);
+
+  /* Ctrl+Alt+F2 → windowed dev mode (Tauri) or dev overlay (browser) */
+  useEffect(() => {
+    const handler = async (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.altKey || e.key !== "F2") return;
+      e.preventDefault();
+      if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("toggle_dev_window");
+        } catch { /* ignore */ }
+      } else {
+        setShowDev(d => !d);
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, []);
+
   const [updating, setUpdating] = useState(false);
   const screenRef = useRef(screen);
   useEffect(() => { screenRef.current = screen; }, [screen]);
@@ -577,6 +727,16 @@ export default function KioskRoot() {
           </>
         )}
       </div>
+      {showDev && (
+        <DevOverlay
+          screen={screen}
+          deviceSerial={deviceSerial}
+          deviceConfig={deviceConfig}
+          session={session}
+          onGoto={setScreen}
+          onClose={() => setShowDev(false)}
+        />
+      )}
     </div>
   );
 }

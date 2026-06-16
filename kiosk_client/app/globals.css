@@ -1,3 +1,11 @@
+/* Tailwind v4. The citizen kiosk is styled with inline styles + the custom
+ * classes below (no Tailwind); the admin recorder & dev overlay use Tailwind
+ * utilities. Importing tailwindcss enables those utilities. The aggressive
+ * `*{margin:0;padding:0}` reset below is moved into @layer base so it no longer
+ * outranks Tailwind's utility layer (unlayered CSS beats any layer) — otherwise
+ * p-8/gap-2/etc. on the recorder would be reset to 0. */
+@import "tailwindcss";
+
 /* ═══ Design Tokens ═══════════════════════════════════════ */
 :root {
   --blue:      #0068B7;
@@ -35,7 +43,9 @@
 }
 
 /* ═══ Reset ════════════════════════════════════════════════ */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+}
 html, body, #__next { height: 100%; overflow: hidden; }
 body {
   font-family: 'Be Vietnam Pro', system-ui, sans-serif;

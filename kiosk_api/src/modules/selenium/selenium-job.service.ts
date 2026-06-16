@@ -1,60 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { JobStatus, LogLevel, Prisma } from '@prisma/client';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as crypto from 'crypto';
 import { PrismaService } from '../../prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { SeleniumRunnerService } from './selenium-runner.service';
-import { CitizenInputDto, DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddScreenshotDto, LiveFrameDto } from './selenium.dto';
+import { DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddScreenshotDto } from './selenium.dto';
 
-/** In-memory store for pending citizen input per jobId */
-const citizenInputStore = new Map<string, CitizenInputDto | 'waiting'>();
+// Live frames, interactive control, citizen-input and the recorder action relay
+// all moved to the WebRTC DataChannel (localhost) between each kiosk/CMS and its
+// local automation host. The API now only owns job STATE + persistence.
 
-/** Interaction events (taps/keys/scroll/fill) queued from kiosk/CMS → drained by runner */
-export interface InteractionEvent {
-  type: 'click' | 'touchStart' | 'touchMove' | 'touchEnd' | 'type' | 'key' | 'scroll' | 'fill' | 'finish';
-  x?: number;
-  y?: number;
-  text?: string;
-  key?: string;
-  deltaX?: number;
-  deltaY?: number;
-  selector?: string;
-  selectorType?: string;
-}
-const interactionStore = new Map<string, InteractionEvent[]>();
-/** Cache deviceSerial per job to avoid a DB hit on every focus report */
+/** Cache deviceSerial per job (set at dispatch; used for screenshot routing). */
 const jobDeviceCache = new Map<string, string>();
-/** Latest live JPEG frame per job, kept in memory (served at /…/live.jpg) */
-const liveFrames = new Map<string, Buffer>();
-
-/** Upload bridge: token → which job is waiting for a file (phone QR / kiosk capture) */
-interface UploadSession { jobId: string; createdAt: number; uploadField?: string; fileUrl?: string }
-const uploadSessions = new Map<string, UploadSession>();
-
-/** Recorder: captured actions per record-job, surfaced live to the CMS builder */
-export interface RecordedAction {
-  kind: 'open' | 'click' | 'fill' | 'url';
-  selector?: string;
-  selectorType?: string;
-  tag?: string;
-  inputType?: string;
-  isInput?: boolean;
-  isSelect?: boolean;
-  isCheckable?: boolean;
-  text?: string;
-  name?: string;
-  elId?: string;
-  ariaLabel?: string;
-  label?: string;
-  placeholder?: string;
-  href?: string;
-  url?: string;
-  value?: string;
-  at?: number;
-}
-const recordingStore = new Map<string, RecordedAction[]>();
 
 @Injectable()
 export class SeleniumJobService {
@@ -199,11 +155,6 @@ export class SeleniumJobService {
 
     const updated = await this.prisma.seleniumJob.update({ where: { id: job.id }, data });
 
-    // Free the in-memory live frame once the job reaches a terminal state.
-    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(dto.status)) {
-      liveFrames.delete(job.id);
-    }
-
     // On success, persist a citizen-facing Application tracking record
     if (dto.status === JobStatus.COMPLETED) {
       await this.persistApplication(job, dto.outputData).catch(() => undefined);
@@ -269,124 +220,6 @@ export class SeleniumJobService {
     });
   }
 
-  /** Runner calls this when it needs citizen input (OTP, VNeID, CAPTCHA, confirm) */
-  async requestCitizenInput(
-    id: string,
-    inputType: string,
-    payload: Record<string, unknown> = {},
-  ) {
-    const job = await this.findById(id);
-    const inputData = (job.inputData ?? {}) as Record<string, unknown>;
-    const deviceSerial = inputData['deviceSerial'] as string | undefined;
-
-    // Register that we're waiting
-    citizenInputStore.set(job.id, 'waiting');
-
-    const needsInputPayload = { jobId: job.id, inputType, payload };
-    this.realtime.sendToJob(job.id, 'selenium:needs_input', needsInputPayload);
-    if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:needs_input', needsInputPayload);
-    return { jobId: job.id, inputType, waiting: true };
-  }
-
-  /** Kiosk submits citizen input (OTP, confirmation, etc.) */
-  async submitCitizenInput(id: string, dto: CitizenInputDto) {
-    const job = await this.findById(id);
-    citizenInputStore.set(job.id, dto);
-
-    // Notify CMS and runner (runner polls via /poll-input)
-    this.realtime.emitToCms('selenium:citizen_input', {
-      jobId: job.id,
-      inputType: dto.inputType,
-    });
-
-    return { jobId: job.id, received: true };
-  }
-
-  /** Runner polls this to pick up citizen input */
-  async pollCitizenInput(id: string): Promise<CitizenInputDto | null> {
-    const job = await this.findById(id);
-    const entry = citizenInputStore.get(job.id);
-    if (!entry || entry === 'waiting') return null;
-    // Clear after pickup so runner only gets it once
-    citizenInputStore.delete(job.id);
-    return entry;
-  }
-
-  // ─── Interactive remote control (kiosk taps/keys → runner browser) ──────────
-
-  /** Kiosk enqueues a tap/key/scroll event. Hot path — no DB hit. */
-  enqueueInteraction(id: string, event: InteractionEvent) {
-    const arr = interactionStore.get(id) ?? [];
-    const last = arr[arr.length - 1];
-    if (event.type === 'touchMove' && last?.type === 'touchMove') {
-      arr[arr.length - 1] = event;
-    } else if (event.type === 'scroll' && last?.type === 'scroll') {
-      last.deltaX = (last.deltaX ?? 0) + (event.deltaX ?? 0);
-      last.deltaY = (last.deltaY ?? 0) + (event.deltaY ?? 0);
-    } else {
-      arr.push(event);
-    }
-    if (arr.length > 64) arr.splice(0, arr.length - 64);
-    interactionStore.set(id, arr);
-    return { queued: arr.length };
-  }
-
-  /** Runner drains all pending interaction events (short-poll). */
-  drainInteractions(id: string): InteractionEvent[] {
-    const arr = interactionStore.get(id) ?? [];
-    if (arr.length) interactionStore.set(id, []);
-    return arr;
-  }
-
-  /** Runner reports whether the element focused after a tap is a text input,
-   *  so the kiosk can auto-show / hide the on-screen keyboard. */
-  reportInputFocus(id: string, focused: boolean) {
-    const payload = { jobId: id, focused };
-    this.realtime.sendToJob(id, 'selenium:input_focus', payload);
-    const deviceSerial = jobDeviceCache.get(id);
-    if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:input_focus', payload);
-    return { ok: true };
-  }
-
-  // ─── Recorder (admin "inspect to record" template builder) ──────────────────
-
-  /** Start a record session: dispatch a job that opens the URL in record mode. */
-  async startRecording(input: { templateId?: string; url: string }) {
-    let templateId = input.templateId;
-    // Record jobs need a template FK; if none given, pick any template as a host.
-    if (!templateId) {
-      const anyTpl = await this.prisma.workflowTemplate.findFirst({ where: { deletedAt: null }, select: { id: true } });
-      if (!anyTpl) throw new NotFoundException('Chưa có quy trình nào để ghi. Hãy tạo quy trình trước.');
-      templateId = anyTpl.id;
-    }
-    const job = await this.dispatch({
-      templateId,
-      priority: 9,
-      inputData: { recordMode: true, recordUrl: input.url } as Record<string, unknown>,
-    } as DispatchJobDto);
-    recordingStore.set(job.id, []);
-    return { jobId: job.id, status: job.status, runnerAssigned: !!job.runnerId, url: input.url };
-  }
-
-  /** Runner reports one captured action; buffer it and push to the CMS live. */
-  recordAction(id: string, action: RecordedAction) {
-    if (action.kind === 'url') {
-      // URL change — just inform the CMS for the address bar, don't buffer
-      this.realtime.emitToCms('selenium:record_url', { jobId: id, url: action.url });
-      return { ok: true };
-    }
-    const arr = recordingStore.get(id) ?? [];
-    const stamped = { ...action, at: Date.now() };
-    arr.push(stamped);
-    recordingStore.set(id, arr);
-    this.realtime.emitToCms('selenium:recorded', { jobId: id, action: stamped, index: arr.length - 1 });
-    return { ok: true, count: arr.length };
-  }
-
-  getRecording(id: string): RecordedAction[] {
-    return recordingStore.get(id) ?? [];
-  }
-
   /** Replace ALL steps of a template with the provided ordered list (recorder save). */
   async replaceSteps(templateId: string, steps: Array<Record<string, unknown>>) {
     const tpl = await this.prisma.workflowTemplate.findFirst({ where: { deletedAt: null, OR: [{ id: templateId }, { code: templateId }] } });
@@ -413,45 +246,6 @@ export class SeleniumJobService {
       });
     }
     return this.prisma.workflowStep.findMany({ where: { templateId: tpl.id, deletedAt: null }, orderBy: { stepOrder: 'asc' } });
-  }
-
-  // ─── File upload bridge (kiosk scan / phone QR → runner setInputFiles) ──────
-
-  /** Create a one-time upload session for a job. Returns a short token used by
-   *  the phone QR page and the kiosk camera capture to POST a file. */
-  createUploadSession(jobId: string, uploadField?: string) {
-    const token = crypto.randomBytes(10).toString('hex');
-    uploadSessions.set(token, { jobId, createdAt: Date.now(), uploadField });
-    return { token, jobId };
-  }
-
-  getUploadSession(token: string): UploadSession | null {
-    return uploadSessions.get(token) ?? null;
-  }
-
-  /** Receive a file (from phone or kiosk), persist it, and hand it to the runner
-   *  via the citizen-input channel so it can call setInputFiles(). */
-  async receiveUpload(token: string, buffer: Buffer, originalName: string) {
-    const sess = uploadSessions.get(token);
-    if (!sess) throw new NotFoundException('Phiên tải tệp không tồn tại hoặc đã hết hạn.');
-
-    const dir = path.join(process.cwd(), 'uploads', 'selenium-uploads');
-    fs.mkdirSync(dir, { recursive: true });
-    const safe = (originalName || 'file').replace(/[^\w.\-]/g, '_').slice(-60);
-    const fname = `${token}_${Date.now()}_${safe}`;
-    fs.writeFileSync(path.join(dir, fname), buffer);
-    const fileUrl = `/uploads/selenium-uploads/${fname}`;
-    sess.fileUrl = fileUrl;
-
-    // Hand the file to the runner (it polls citizen-input)
-    await this.submitCitizenInput(sess.jobId, { inputType: 'UPLOAD', value: fileUrl, payload: { fileUrl } });
-
-    // Tell the kiosk the file arrived so it can close the upload overlay
-    const uploadPayload = { jobId: sess.jobId, fileUrl };
-    this.realtime.sendToJob(sess.jobId, 'selenium:upload_received', uploadPayload);
-    const deviceSerial = jobDeviceCache.get(sess.jobId);
-    if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:upload_received', uploadPayload);
-    return { ok: true, fileUrl };
   }
 
   async cancel(id: string) {
@@ -524,56 +318,13 @@ export class SeleniumJobService {
           stepOrder: dto.stepOrder,
           pageUrl: dto.pageUrl,
         };
-        // Primary: deliver by jobId (kiosk subscribes to the job it launched).
+        // Deliver persisted step screenshots by jobId (+ deviceSerial fallback).
         this.realtime.sendToJob(jobId, 'selenium:screenshot', payload);
-        // Secondary best-effort route by deviceSerial (back-compat).
         if (deviceSerial) this.realtime.sendToDevice(deviceSerial, 'selenium:screenshot', payload);
-        // Record sessions have no kiosk device — mirror frames to the CMS builder
-        if (recordingStore.has(jobId)) this.realtime.emitToCms('selenium:screenshot', payload);
       }
     } catch { /* non-critical */ }
 
     return shot ?? { jobId, storagePath: dto.storagePath, isLive: true };
-  }
-
-  /**
-   * Relay a live frame to the kiosk + CMS. We emit BOTH:
-   *  - `selenium:frame` (binary JPEG over WS) — new client, lowest latency.
-   *  - `selenium:screenshot` (URL to the in-memory frame) — universal fallback
-   *    that ANY client build renders (old kiosk bundles listen for this), routed
-   *    by jobId AND deviceSerial so it works regardless of subscription style.
-   * The frame is kept in memory (not on disk) and served at /…/live.jpg.
-   */
-  pushLiveFrame(jobId: string, dto: LiveFrameDto) {
-    let data: Buffer;
-    try { data = Buffer.from(dto.b64, 'base64'); } catch { return { ok: false }; }
-    liveFrames.set(jobId, data);
-
-    const url = `/selenium/jobs/${jobId}/live.jpg`;
-    const framePayload = { jobId, data, pageUrl: dto.pageUrl, stepOrder: dto.stepOrder };
-    const shotPayload = { jobId, screenshotUrl: url, pageUrl: dto.pageUrl, stepOrder: dto.stepOrder };
-
-    // New client (binary) + URL fallback, both by jobId.
-    this.realtime.sendToJob(jobId, 'selenium:frame', framePayload);
-    this.realtime.sendToJob(jobId, 'selenium:screenshot', shotPayload);
-
-    // Old client routes by deviceSerial (heartbeat) and only knows screenshot URLs.
-    const deviceSerial = jobDeviceCache.get(jobId);
-    if (deviceSerial) {
-      this.realtime.sendToDevice(deviceSerial, 'selenium:frame', framePayload);
-      this.realtime.sendToDevice(deviceSerial, 'selenium:screenshot', shotPayload);
-    }
-
-    if (recordingStore.has(jobId)) {
-      this.realtime.emitToCms('selenium:frame', framePayload);
-      this.realtime.emitToCms('selenium:screenshot', shotPayload);
-    }
-    return { ok: true, bytes: data.length };
-  }
-
-  /** Latest in-memory live frame for a job (served as image/jpeg). */
-  getLiveFrame(jobId: string): Buffer | undefined {
-    return liveFrames.get(jobId);
   }
 
   async getJobLogs(jobId: string, limit = 500) {

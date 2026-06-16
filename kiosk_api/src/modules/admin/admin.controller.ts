@@ -66,14 +66,22 @@ export class AdminController {
   @ApiQuery({ name: 'locationId', required: false })
   @ApiQuery({ name: 'module', required: false })
   @ApiQuery({ name: 'action', required: false })
+  @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   auditLogs(
     @Query('locationId') locationId?: string,
     @Query('module') module?: string,
     @Query('action') action?: string,
+    @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.audit.list({ locationId: locationId || null, module, action, limit: limit ? +limit : 200 });
+    return this.audit.list({
+      locationId: locationId || null,
+      module,
+      action,
+      page: page ? +page : undefined,
+      limit: limit ? +limit : undefined,
+    });
   }
 
   @Post('users')

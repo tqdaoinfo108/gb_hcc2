@@ -348,36 +348,8 @@ export const seleniumApi = {
   }),
   getJob: (jobId: string) => apiRequest<SeleniumJobData>(`/selenium/jobs/${jobId}`),
   cancel:  (jobId: string) => apiRequest<SeleniumJobData>(`/selenium/jobs/${jobId}/cancel`, { method: 'POST' }),
-  submitCitizenInput: (jobId: string, body: { inputType: string; value?: string; payload?: Record<string, unknown> }) =>
-    apiRequest<{ jobId: string; received: boolean }>(`/selenium/jobs/${jobId}/citizen-input`, {
-      method: 'POST', body: JSON.stringify(body),
-    }),
-  /** Interactive remote control — forward touch/key/scroll/finish to the live browser */
-  interact: (jobId: string, body: {
-    type: 'click' | 'touchStart' | 'touchMove' | 'touchEnd' | 'type' | 'key' | 'scroll' | 'finish';
-    x?: number;
-    y?: number;
-    text?: string;
-    key?: string;
-    deltaX?: number;
-    deltaY?: number;
-  }) =>
-    apiRequest<{ queued: number }>(`/selenium/jobs/${jobId}/interact`, {
-      method: 'POST', body: JSON.stringify(body),
-    }),
-  /** Create an upload session (returns QR + mobile URL) when the portal asks for a file */
-  createUploadSession: (jobId: string, baseUrl?: string) =>
-    apiRequest<{ token: string; mobileUrl: string; qrUrl: string }>(`/selenium/upload/session/${jobId}`, {
-      method: 'POST', body: JSON.stringify({ baseUrl: baseUrl ?? apiUrl }),
-    }),
-  /** Upload a file captured on the kiosk itself */
-  uploadKioskFile: async (token: string, file: File) => {
-    const form = new FormData();
-    form.append('file', file);
-    const res = await fetch(`${apiUrl}/selenium/upload/${token}`, { method: 'POST', body: form });
-    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-    return res.json() as Promise<{ ok: boolean; fileUrl: string }>;
-  },
+  // Live view + input + uploads now flow P2P over the automation engine's WebRTC
+  // DataChannel (signaling via Tauri IPC) — no HTTP interaction/frame/upload relay.
 };
 
 // ─── Procedures API ──────────────────────────────────────

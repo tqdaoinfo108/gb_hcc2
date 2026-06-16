@@ -3,23 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "workspaces": [
-    "apps/*",
-    "packages/*"
+    "kiosk_api",
+    "kiosk_cms",
+    "kiosk_client",
+    "automation-core"
   ],
   "scripts": {
-    "db:ready": "node scripts/db-ready.mjs",
-    "db:migrate": "prisma migrate deploy --schema packages/config/prisma/schema.prisma",
-    "db:generate": "prisma generate --schema packages/config/prisma/schema.prisma",
-    "preflight": "node scripts/preflight.mjs",
-    "bootstrap": "npm run db:generate && npm run db:ready && npm run db:migrate && npm run db:generate",
-    "dev": "npm run bootstrap && concurrently \"npm run dev -w @smart-kiosk/api\" \"npm run dev -w @smart-kiosk/cms\" \"npm run dev -w @smart-kiosk/kiosk\"",
-    "dev:api": "npm run bootstrap && npm run dev -w @smart-kiosk/api",
-    "dev:cms": "npm run bootstrap && npm run dev -w @smart-kiosk/cms",
-    "dev:kiosk": "npm run bootstrap && npm run dev -w @smart-kiosk/kiosk",
-    "build": "npm run bootstrap && npm run build -w @smart-kiosk/shared-types && npm run build -w @smart-kiosk/config && npm run build -w @smart-kiosk/ui && npm run build -w @smart-kiosk/api && npm run build -w @smart-kiosk/cms && npm run build -w @smart-kiosk/kiosk",
-    "start": "npm run bootstrap && concurrently \"npm run start:prod -w @smart-kiosk/api\" \"npm run start -w @smart-kiosk/cms\"",
-    "tauri:dev": "npm run bootstrap && npm run tauri:dev -w @smart-kiosk/kiosk",
-    "tauri:build": "npm run bootstrap && npm run tauri:build -w @smart-kiosk/kiosk",
     "package:server": "powershell -ExecutionPolicy Bypass -File scripts/package-windows-server-release.ps1"
   },
   "devDependencies": {

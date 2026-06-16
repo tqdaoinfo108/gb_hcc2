@@ -38,26 +38,45 @@ if not exist "kiosk_client\node_modules" (
   echo Installing kiosk_client dependencies...
   cd kiosk_client && npm install && cd ..
 )
-if not exist "kiosk_runner\node_modules" (
-  echo Installing kiosk_runner dependencies...
-  cd kiosk_runner && npm install && npx playwright install chromium && cd ..
+:: automation-core holds the Playwright + WebRTC engine. There is no separate
+:: recorder/sidecar process any more — the Tauri shell spawns automation-core's
+:: engine (bin/engine.js) as a child over stdio when you run `npm run tauri:dev`.
+:: We still install it so Chromium + @roamhq/wrtc are ready for that engine.
+if not exist "automation-core\node_modules" (
+  echo Installing automation-core dependencies + Chromium...
+  cd automation-core && npm install && npx playwright install chromium && cd ..
 )
 
 :: Clear stale Next.js build caches to prevent chunk mismatch errors
 if exist "kiosk_cms\.next"    rmdir /s /q "kiosk_cms\.next"
 if exist "kiosk_client\.next" rmdir /s /q "kiosk_client\.next"
 
+:: Free dev ports so a stale dev server doesn't block a clean start.
+echo.
+echo Freeing dev ports (3000 3001 3002)...
+for %%p in (3000 3001 3002) do (
+  for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":%%p " ^| findstr LISTENING') do (
+    echo   port %%p held by PID %%a - killing
+    taskkill /F /PID %%a >nul 2>nul
+  )
+)
+:: Give the OS a moment to release the sockets before re-binding.
+ping -n 2 127.0.0.1 >nul
+
 echo.
 echo Starting all services...
 start "kiosk_api"    cmd /k "cd /d "%~dp0kiosk_api"    && npm run dev"
 start "kiosk_cms"    cmd /k "cd /d "%~dp0kiosk_cms"    && npm run dev"
-start "kiosk_client" cmd /k "cd /d "%~dp0kiosk_client" && npm run dev"
-start "kiosk_runner" cmd /k "cd /d "%~dp0kiosk_runner" && set API_BASE=http://localhost:3001&& set RUNNER_ID=runner-01&& set BROWSER_MODE=hidden&& npm start"
+:: kiosk_client chạy qua Tauri shell — Next dev server được Tauri khởi động nội bộ.
+:: Recorder, executor, và automation-core engine đều chạy trong cùng tiến trình này.
+start "kiosk_client (Tauri)" cmd /k "cd /d "%~dp0kiosk_client" && npm run tauri:dev"
 
 echo.
 echo   kiosk_api    -^> http://localhost:3001
-echo   kiosk_cms    -^> http://localhost:3002
-echo   kiosk_client -^> http://localhost:3000
-echo   kiosk_runner -^> Selenium/Playwright agent (runner-01)
+echo   kiosk_cms    -^> http://localhost:3002  (workflow editor)
+echo   kiosk_client -^> Tauri desktop app  (Next.js served nội bộ trên :3000)
+echo.
+echo   Recorder: gõ Ctrl+Alt+Shift+R trong cửa sổ Tauri, hoặc tap 5 lần góc trên-trái.
+echo   Dev overlay (Ctrl+Alt+F2) CHỈ hoạt động trên browser, không phải Tauri.
 echo.
 pause >nul

@@ -92,13 +92,6 @@ export class DispatchJobDto {
   @ApiPropertyOptional() @IsOptional() @IsObject() inputData?: Record<string, unknown>;
 }
 
-export class CitizenInputDto {
-  /** Type of input: OTP_SMS | VNEID_QR_SCANNED | CAPTCHA_SOLVED | CONFIRM | CANCEL */
-  @ApiProperty() @IsString() inputType!: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() value?: string;
-  @ApiPropertyOptional() @IsOptional() @IsObject() payload?: Record<string, unknown>;
-}
-
 export class UpdateJobStatusDto {
   @ApiProperty({ enum: JobStatus }) @IsEnum(JobStatus) status!: JobStatus;
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) @Max(100) progressPercent?: number;
@@ -109,64 +102,8 @@ export class UpdateJobStatusDto {
   @ApiPropertyOptional() @IsOptional() @IsString() citizenMessage?: string;
 }
 
-export class InteractEventDto {
-  @ApiProperty({ description: 'click | touchStart | touchMove | touchEnd | type | key | scroll | fill | finish' })
-  @IsString() type!: 'click' | 'touchStart' | 'touchMove' | 'touchEnd' | 'type' | 'key' | 'scroll' | 'fill' | 'finish';
-  @ApiPropertyOptional() @IsOptional() @IsInt() x?: number;
-  @ApiPropertyOptional() @IsOptional() @IsInt() y?: number;
-  @ApiPropertyOptional() @IsOptional() @IsString() text?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() key?: string;
-  @ApiPropertyOptional() @IsOptional() @IsInt() deltaX?: number;
-  @ApiPropertyOptional() @IsOptional() @IsInt() deltaY?: number;
-  @ApiPropertyOptional() @IsOptional() @IsString() selector?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() selectorType?: string;
-}
-
-export class ReportFocusDto {
-  @ApiProperty() @IsBoolean() focused!: boolean;
-}
-
-export class LiveFrameDto {
-  /** Base64-encoded JPEG bytes of the current page. */
-  @ApiProperty() @IsString() b64!: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() pageUrl?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() stepName?: string;
-  @ApiPropertyOptional() @IsOptional() @IsInt() stepOrder?: number;
-}
-
-export class StartRecordingDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() templateId?: string;
-  @ApiProperty() @IsString() url!: string;
-}
-
-export class RecordActionDto {
-  @ApiProperty() @IsString() kind!: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() selector?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() selectorType?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() tag?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() inputType?: string;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isInput?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isSelect?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isCheckable?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsString() text?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() elId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() ariaLabel?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() label?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() placeholder?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() href?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() url?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() value?: string;
-}
-
 export class ReplaceStepsDto {
   @ApiProperty({ type: [Object] }) @IsArray() steps!: Array<Record<string, unknown>>;
-}
-
-export class RequestInputDto {
-  @ApiProperty({ description: 'OTP_SMS | VNEID_QR | CAPTCHA_WAIT | CONFIRM_DATA' })
-  @IsString() inputType!: string;
-  @ApiPropertyOptional() @IsOptional() @IsObject() payload?: Record<string, unknown>;
 }
 
 export class AddJobLogDto {

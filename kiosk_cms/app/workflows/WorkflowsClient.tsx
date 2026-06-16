@@ -2,7 +2,6 @@
 
 import { useState, useTransition, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { RecorderModal } from "./RecorderModal";
 import { auditHeaders } from "../lib/audit-headers";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
@@ -117,6 +116,85 @@ function fieldsFor(stepType: string) {
   const needsAssert = ["ASSERT", "DETECT_SUCCESS_TEXT"].includes(stepType);
   const needsUpload = ["UPLOAD", "UPLOAD_DOCUMENT"].includes(stepType);
   return { needsSelector, needsUrl, needsInput, needsAssert, needsUpload };
+}
+
+/* ── Standard "Cổng DVC" skeleton ────────────────────────────
+ * A one-click backbone for a typical online public-service submission. The
+ * selector-less SEMANTIC steps (open / search / VNeID / upload / submit / detect
+ * / extract) work as-is; the INPUT/SELECT steps come pre-bound to the right CCCD
+ * variable (keys mirror workflow-variables.ts) so the admin only fills selectors.
+ * Sent via PUT /:id/steps (replaceSteps assigns stepOrder by index). */
+function dvcSkeleton(targetUrl: string) {
+  const s = (
+    stepType: string, name: string,
+    extra: Partial<{ url: string; inputValue: string; assertText: string; onFailure: string }> = {},
+  ) => ({ stepType, name, selectorType: "CSS", onFailure: "STOP", ...extra });
+  return [
+    s("OPEN_URL", "Mở cổng dịch vụ công", { url: targetUrl || "https://dichvucong.gov.vn/" }),
+    s("SEARCH_PROCEDURE", "Tìm thủ tục"),
+    s("CLICK_MENU", "Chọn thủ tục trong kết quả"),
+    s("WAIT_VNEID_LOGIN", "Chờ công dân đăng nhập VNeID"),
+    s("INPUT_FIELD", "Điền: Họ và tên", { inputValue: "{{citizen.fullName}}" }),
+    s("INPUT_FIELD", "Điền: Ngày sinh", { inputValue: "{{citizen.dateOfBirth}}" }),
+    s("INPUT_FIELD", "Điền: Số CCCD / Định danh", { inputValue: "{{citizen.nationalId}}" }),
+    s("SELECT_OPTION", "Chọn: Tỉnh / Thành phố", { inputValue: "{{citizen.province}}" }),
+    s("SELECT_OPTION", "Chọn: Quận / Huyện", { inputValue: "{{citizen.district}}" }),
+    s("SELECT_OPTION", "Chọn: Phường / Xã", { inputValue: "{{citizen.ward}}" }),
+    s("INPUT_FIELD", "Điền: Địa chỉ chi tiết", { inputValue: "{{citizen.address}}" }),
+    s("INPUT_FIELD", "Điền: Số điện thoại", { inputValue: "{{citizen.phone}}" }),
+    s("UPLOAD_DOCUMENT", "Tải tài liệu đính kèm", { onFailure: "SKIP" }),
+    s("WAIT_SUBMIT", "Bấm nộp & chờ xử lý"),
+    s("DETECT_SUCCESS_TEXT", "Phát hiện thông báo thành công", { assertText: "tiếp nhận" }),
+    s("EXTRACT_APPLICATION_CODE", "Trích mã hồ sơ", { onFailure: "SKIP" }),
+  ];
+}
+
+/* ── Recorder import (paste from the Tauri recorder's "Copy sang CMS") ──
+ * The recorder emits {_:"kiosk-recorder/v1", code, targetUrl, steps:[...]}.
+ * Two apply modes: replace all, or merge ONLY selectors into the steps that
+ * still lack one (so the DVC skeleton keeps its names + CCCD bindings and the
+ * admin's selector capture just fills the blanks). */
+interface RecordedStep {
+  stepType: string; name?: string; selector?: string; selectorType?: string;
+  inputValue?: string; url?: string; waitFor?: string; assertText?: string;
+  uploadField?: string; onFailure?: string;
+}
+const isBinding = (v?: string | null) => !!v && /\{\{\s*[\w.]+\s*\}\}/.test(v);
+
+function stepPayload(s: Step) {
+  return {
+    stepType: s.stepType, name: s.name, url: s.url || undefined,
+    selector: s.selector || undefined, selectorType: s.selectorType || "CSS",
+    inputValue: s.inputValue || undefined, waitFor: s.waitFor || undefined,
+    assertText: s.assertText || undefined, uploadField: s.uploadField || undefined,
+    onFailure: s.onFailure || "STOP", isRequired: s.isRequired, delayAfterMs: s.delayAfterMs,
+  } as Record<string, unknown>;
+}
+
+/** Fill selectors from `recorded` into existing steps that lack one, matching
+ *  by stepType in order (Nth INPUT_FIELD ← Nth recorded INPUT_FIELD w/ selector). */
+function mergeRecorded(existing: Step[], recorded: RecordedStep[]) {
+  const pool: Record<string, RecordedStep[]> = {};
+  for (const r of recorded) if (r.selector) (pool[r.stepType] ??= []).push(r);
+  return existing.map(e => {
+    const p = stepPayload(e);
+    if (!e.selector && pool[e.stepType]?.length) {
+      const r = pool[e.stepType].shift()!;
+      p.selector = r.selector;
+      p.selectorType = r.selectorType || "CSS";
+      if (!p.inputValue && r.inputValue && !isBinding(e.inputValue)) p.inputValue = r.inputValue;
+    }
+    return p;
+  });
+}
+
+/** How many existing blank-selector steps a recorded set would fill (preview). */
+function countMergeable(existing: Step[], recorded: RecordedStep[]) {
+  const avail: Record<string, number> = {};
+  for (const r of recorded) if (r.selector) avail[r.stepType] = (avail[r.stepType] ?? 0) + 1;
+  let n = 0;
+  for (const e of existing) if (!e.selector && (avail[e.stepType] ?? 0) > 0) { avail[e.stepType]--; n++; }
+  return n;
 }
 
 /* ── API helpers ─────────────────────────────────────────── */
@@ -255,6 +333,7 @@ function TemplateCreateForm({
   const [name, setName] = useState("");
   const [targetUrl, setTargetUrl] = useState("https://dichvucong.gov.vn/");
   const [procedureId, setProcedureId] = useState("");
+  const [withSkeleton, setWithSkeleton] = useState(true);
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -266,6 +345,9 @@ function TemplateCreateForm({
         procedureId: procedureId || undefined,
         screenshotMode: "ON_EACH_STEP",
       });
+      if (withSkeleton) {
+        await api(`/selenium/templates/${created.id}/steps`, "PUT", { steps: dvcSkeleton(targetUrl.trim()) });
+      }
       onCreated(created.id);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -296,6 +378,15 @@ function TemplateCreateForm({
             {procedures.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
           </select>
         </Field>
+        <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-slate-700">
+          <input type="checkbox" checked={withSkeleton} onChange={e => setWithSkeleton(e.target.checked)} className="mt-0.5 h-4 w-4 rounded" />
+          <span>
+            <span className="font-bold text-amber-800">⚡ Tạo kèm khung chuẩn DVC</span>
+            <span className="mt-0.5 block text-[12px] text-slate-500">
+              Điền sẵn ~16 bước cơ bản (mở cổng → tìm thủ tục → VNeID → điền CCCD → tải tệp → nộp → phát hiện thành công → trích mã). Bạn chỉ chỉnh selector sau.
+            </span>
+          </span>
+        </label>
       </div>
       <div className="mt-6 flex gap-3">
         <button onClick={submit} disabled={busy}
@@ -325,7 +416,7 @@ function TemplateEditor({
   });
   const [metaDirty, setMetaDirty] = useState(false);
   const [editingStep, setEditingStep] = useState<Step | "new" | null>(null);
-  const [recording, setRecording] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const setM = <K extends keyof typeof meta>(k: K, v: (typeof meta)[K]) => {
     setMeta(prev => ({ ...prev, [k]: v })); setMetaDirty(true);
@@ -343,6 +434,13 @@ function TemplateEditor({
   const togglePublish = () => run(() => api(`/selenium/templates/${template.id}`, "PATCH", { isPublished: !template.isPublished }));
   const deleteTemplate = () => { if (confirm(`Xoá quy trình "${template.name}"?`)) run(() => api(`/selenium/templates/${template.id}`, "DELETE")); };
   const deleteStep = (s: Step) => { if (confirm(`Xoá bước "${s.name}"?`)) run(() => api(`/selenium/templates/${template.id}/steps/${s.id}`, "DELETE")); };
+
+  // One-click standard DVC backbone (replaces ALL steps).
+  const applyDvcSkeleton = () => {
+    if (template.steps.length > 0 &&
+        !confirm(`Thao tác này sẽ THAY TOÀN BỘ ${template.steps.length} bước hiện có bằng khung chuẩn DVC. Tiếp tục?`)) return;
+    run(() => api(`/selenium/templates/${template.id}/steps`, "PUT", { steps: dvcSkeleton(meta.targetUrl || template.targetUrl) }));
+  };
 
   const moveStep = (idx: number, dir: -1 | 1) => {
     const a = template.steps[idx], b = template.steps[idx + dir];
@@ -375,14 +473,12 @@ function TemplateEditor({
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
-            <button
-              onClick={() => setRecording(true)}
-              disabled={pending}
-              title="Mở cổng dịch vụ công trên runner và bấm để tự động ghi lại các bước"
-              className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-40"
+            <span
+              title="Việc ghi quy trình (mở cổng DVC + bắt thao tác) chạy trong ứng dụng kiosk (Tauri), mở bằng ?mode=record. CMS dùng để chỉnh sửa & xuất bản các bước đã ghi."
+              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-500"
             >
-              <span className="h-2 w-2 rounded-full bg-white" /> Ghi quy trình
-            </button>
+              <span className="h-2 w-2 rounded-full bg-slate-400" /> Ghi trên ứng dụng kiosk
+            </span>
             <button
               onClick={togglePublish}
               disabled={pending || (!template.isPublished && !publishable)}
@@ -452,10 +548,22 @@ function TemplateEditor({
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-base font-black text-slate-900">Các bước thực thi ({template.steps.length})</h3>
-          <button onClick={() => setEditingStep("new")}
-            className="rounded-xl border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-bold text-blue-700 hover:bg-blue-100">
-            + Thêm bước
-          </button>
+          <div className="flex gap-2">
+            <button onClick={applyDvcSkeleton} disabled={pending}
+              title="Điền sẵn khung bước chuẩn cho thủ tục DVC trực tuyến (mở cổng → tìm → VNeID → điền CCCD → tải tệp → nộp → phát hiện thành công → trích mã). Bạn chỉ cần chỉnh selector."
+              className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-bold text-amber-700 transition hover:bg-amber-100 disabled:opacity-40">
+              ⚡ Khung chuẩn DVC
+            </button>
+            <button onClick={() => setImporting(true)} disabled={pending}
+              title="Dán JSON từ recorder (nút 'Copy sang CMS' trong app kiosk) để điền selector vào các bước."
+              className="rounded-xl border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm font-bold text-violet-700 transition hover:bg-violet-100 disabled:opacity-40">
+              ⬇ Nhập từ recorder
+            </button>
+            <button onClick={() => setEditingStep("new")}
+              className="rounded-xl border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-bold text-blue-700 hover:bg-blue-100">
+              + Thêm bước
+            </button>
+          </div>
         </div>
 
         {template.steps.length === 0 ? (
@@ -501,14 +609,94 @@ function TemplateEditor({
         />
       )}
 
-      {recording && (
-        <RecorderModal
-          templateId={template.id}
-          targetUrl={meta.targetUrl || template.targetUrl}
-          onClose={() => { setRecording(false); run(async () => {}); }}
-          onSaved={() => { setRecording(false); run(async () => {}); }}
-        />
+      {importing && (
+        <ImportRecorderModal template={template} pending={pending} run={run} onClose={() => setImporting(false)} />
       )}
+    </div>
+  );
+}
+
+/* ── Import-from-recorder modal ──────────────────────────── */
+function ImportRecorderModal({
+  template, pending, run, onClose,
+}: { template: Template; pending: boolean; run: (fn: () => Promise<unknown>) => Promise<void>; onClose: () => void }) {
+  const [raw, setRaw] = useState("");
+  const [steps, setSteps] = useState<RecordedStep[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const parse = (text: string) => {
+    setRaw(text);
+    if (!text.trim()) { setSteps(null); setErr(null); return; }
+    try {
+      const j = JSON.parse(text);
+      const arr: unknown = Array.isArray(j) ? j : j?.steps;
+      if (!Array.isArray(arr) || arr.length === 0) throw new Error("Không tìm thấy mảng 'steps'.");
+      setSteps(arr as RecordedStep[]); setErr(null);
+    } catch (e) {
+      setSteps(null);
+      setErr(e instanceof Error ? `JSON không hợp lệ: ${e.message}` : "JSON không hợp lệ.");
+    }
+  };
+
+  const pasteClipboard = async () => {
+    try { parse(await navigator.clipboard.readText()); }
+    catch { setErr("Không đọc được clipboard — hãy dán thủ công (Ctrl+V)."); }
+  };
+
+  const withSelector = steps?.filter(s => s.selector).length ?? 0;
+  const mergeable = steps ? countMergeable(template.steps, steps) : 0;
+
+  const doMerge = () => run(async () => {
+    await api(`/selenium/templates/${template.id}/steps`, "PUT", { steps: mergeRecorded(template.steps, steps!) });
+    onClose();
+  });
+  const doReplace = () => {
+    if (template.steps.length > 0 &&
+        !confirm(`Thay TOÀN BỘ ${template.steps.length} bước hiện có bằng ${steps!.length} bước đã ghi?`)) return;
+    run(async () => {
+      await api(`/selenium/templates/${template.id}/steps`, "PUT", { steps: steps! });
+      onClose();
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6" onClick={onClose}>
+      <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl bg-white p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-black text-slate-900">Nhập từ recorder</h3>
+        <p className="mt-1 text-sm text-slate-500">
+          Trong app kiosk: ghi quy trình → bấm <b>Copy sang CMS</b>. Dán đoạn JSON đó vào đây.
+        </p>
+
+        <div className="mt-3 flex items-center gap-2">
+          <button onClick={pasteClipboard}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50">
+            📋 Dán từ clipboard
+          </button>
+          {steps && <span className="text-xs font-semibold text-slate-500">{steps.length} bước · {withSelector} có selector</span>}
+        </div>
+
+        <textarea value={raw} onChange={e => parse(e.target.value)} placeholder='{"_":"kiosk-recorder/v1","steps":[…]}'
+          className="mt-2 min-h-[160px] flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-600 focus:border-blue-400 focus:outline-none" />
+
+        {err && <p className="mt-2 text-sm font-semibold text-red-600">{err}</p>}
+        {steps && (
+          <p className="mt-2 rounded-lg bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700">
+            “Điền selector” sẽ bổ sung selector cho <b>{mergeable}</b> bước đang trống (giữ nguyên tên + ràng buộc CCCD).
+          </p>
+        )}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">Đóng</button>
+          <button onClick={doReplace} disabled={!steps || pending}
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
+            Thay toàn bộ
+          </button>
+          <button onClick={doMerge} disabled={!steps || pending || mergeable === 0}
+            className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-40">
+            Điền selector ({mergeable})
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

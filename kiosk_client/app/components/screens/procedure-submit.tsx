@@ -3,7 +3,8 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { TopBar } from "../ui";
 import { Icon } from "../icons";
 import { seleniumApi, workflowApi } from "../../lib/api";
-import { VirtualKeyboard } from "../VirtualKeyboard";
+import { engineSend, onEngineMessage, onEngineStatus, isTauri } from "../../lib/engine-bridge";
+import { useBrowserOverlay } from "../../lib/use-browser-overlay";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,26 +41,6 @@ interface DemoStep {
   portalAction: string;
   durationMs: number;
   interaction?: InteractionType;
-}
-
-// Runner's logical viewport (CSS px). Live frames are captured at 2× this, but
-// touch/click coordinates are always sent in this logical space.
-const RUNNER_VIEW_W = 1366;
-const RUNNER_VIEW_H = 900;
-
-interface FramePoint {
-  x: number;
-  y: number;
-}
-
-interface FrameGesture {
-  pointerId: number;
-  startClientX: number;
-  startClientY: number;
-  moved: boolean;
-  lastSentAt: number;
-  pendingPoint: FramePoint | null;
-  flushTimer: number | null;
 }
 
 const DEMO_STEPS: DemoStep[] = [
@@ -341,66 +322,51 @@ function CaptchaOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
-function UploadOverlay({ jobId, onCancel }: { jobId: string; onCancel: () => void }) {
-  const [session, setSession] = useState<{ token: string; qrUrl: string; mobileUrl: string } | null>(null);
+function UploadOverlay({ onPicked, onCancel }: { onPicked: (path: string) => void; onCancel: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    seleniumApi.createUploadSession(jobId).then(setSession).catch(() => setErr("Không tạo được phiên tải tệp."));
-  }, [jobId]);
-
-  async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !session) return;
+  async function pick() {
     setBusy(true); setErr(null);
-    try { await seleniumApi.uploadKioskFile(session.token, file); /* overlay closes on upload_received */ }
-    catch { setErr("Tải tệp thất bại, vui lòng thử lại."); setBusy(false); }
+    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!isTauri) { setErr("Chức năng quét/đính kèm tệp chỉ khả dụng trên thiết bị kiosk."); setBusy(false); return; }
+    try {
+      // Native picker (Tauri) — the picked file lives on this machine, so its
+      // local path is handed straight to the engine (no upload/download).
+      const { invoke } = await import("@tauri-apps/api/core");
+      const res = await invoke<{ path: string }>("pick_document", { source: "file" });
+      if (res?.path) onPicked(res.path);
+      else setErr("Không có tệp nào được chọn.");
+    } catch {
+      setErr("Không chọn được tệp. Vui lòng thử lại.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <OverlayWrap>
-      <div className="card" style={{ width: 720, borderRadius: 28, padding: "40px 44px", display: "flex", flexDirection: "column", gap: 22 }}>
-        <div style={{ textAlign: "center" }}>
+      <div className="card" style={{ width: 560, borderRadius: 28, padding: "40px 44px", display: "flex", flexDirection: "column", gap: 22, alignItems: "center", textAlign: "center" }}>
+        <div style={{ width: 64, height: 64, borderRadius: 16, background: "var(--blue-lt)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Icon name="scan" size={30} style={{ color: "var(--blue)" }} />
+        </div>
+        <div>
           <div style={{ fontSize: 24, fontWeight: 800, color: "var(--ink-0)" }}>Đính kèm tài liệu</div>
-          <div style={{ fontSize: 15, color: "var(--ink-4)", marginTop: 6 }}>
-            Cổng dịch vụ công yêu cầu tải tệp. Chọn một trong hai cách bên dưới.
+          <div style={{ fontSize: 15, color: "var(--ink-4)", marginTop: 6, lineHeight: 1.5 }}>
+            Cổng dịch vụ công yêu cầu tải tệp. Dùng máy quét hoặc chọn tệp tại kiosk.
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 18 }}>
-          {/* Option 1: kiosk camera / file */}
-          <div style={{ flex: 1, border: "1.5px solid var(--ink-7)", borderRadius: 18, padding: "26px 22px", display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center" }}>
-            <div style={{ width: 56, height: 56, borderRadius: 14, background: "var(--blue-lt)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Icon name="scan" size={28} style={{ color: "var(--blue)" }} />
-            </div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: "var(--ink-0)" }}>Chụp / chọn tại kiosk</div>
-            <div style={{ fontSize: 13, color: "var(--ink-4)", lineHeight: 1.5 }}>Dùng máy quét hoặc camera của kiosk để chụp giấy tờ</div>
-            <input ref={fileRef} type="file" accept="image/*,application/pdf" capture="environment" onChange={onPick} style={{ display: "none" }} />
-            <button className="btn btn-primary btn-md" disabled={!session || busy} onClick={() => fileRef.current?.click()} style={{ width: "100%", marginTop: "auto" }}>
-              {busy ? <Spinner size={16} color="#fff" /> : <Icon name="scan" size={18} />} {busy ? "Đang tải lên…" : "Chụp / chọn tệp"}
-            </button>
-          </div>
+        {err && <div style={{ color: "var(--red)", fontSize: 14, fontWeight: 600 }}>{err}</div>}
 
-          {/* Option 2: QR phone upload */}
-          <div style={{ flex: 1, border: "1.5px solid var(--ink-7)", borderRadius: 18, padding: "26px 22px", display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center" }}>
-            <div style={{ fontSize: 17, fontWeight: 700, color: "var(--ink-0)" }}>Tải từ điện thoại</div>
-            <div style={{ fontSize: 13, color: "var(--ink-4)", lineHeight: 1.5 }}>Quét mã QR bằng điện thoại để chụp & gửi tệp lên kiosk</div>
-            <div style={{ padding: 12, background: "#fff", borderRadius: 14, border: "2px solid var(--ink-7)", minHeight: 180, minWidth: 180, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              {session
-                ? <img src={session.qrUrl} alt="QR tải tệp" width={156} height={156} style={{ display: "block" }} />
-                : <Spinner size={28} />}
-            </div>
-            <div style={{ fontSize: 12, color: "var(--ink-5)" }}>Mã có hiệu lực trong phiên hiện tại</div>
-          </div>
+        <div style={{ display: "flex", gap: 12, width: "100%" }}>
+          <button className="btn btn-ghost btn-md" onClick={onCancel} style={{ flex: 1 }}>
+            <Icon name="x" size={18} /> Bỏ qua
+          </button>
+          <button className="btn btn-primary btn-md" disabled={busy} onClick={pick} style={{ flex: 2 }}>
+            {busy ? <Spinner size={16} color="#fff" /> : <Icon name="scan" size={18} />} {busy ? "Đang mở…" : "Chụp / chọn tệp"}
+          </button>
         </div>
-
-        {err && <div style={{ color: "var(--red)", fontSize: 14, textAlign: "center", fontWeight: 600 }}>{err}</div>}
-
-        <button className="btn btn-ghost btn-md" onClick={onCancel} style={{ alignSelf: "center", minWidth: 200 }}>
-          <Icon name="x" size={18} /> Bỏ qua / Để sau
-        </button>
       </div>
     </OverlayWrap>
   );
@@ -468,48 +434,20 @@ export function ProcedureSubmitScreen({
   const [failed, setFailed]             = useState<string | null>(null);
   const [hasScreenshot, setHasScreenshot] = useState(false);
   const [currentUrl, setCurrentUrl]     = useState<string>("https://dichvucong.gov.vn/");
-  const [showKeyboard, setShowKeyboard] = useState(false);
   const [liveMsg, setLiveMsg]           = useState<string | null>(null);
   const activeStepRef                   = useRef(0);
-  const imgRef                          = useRef<HTMLImageElement | null>(null);
-  const hasScreenshotRef                = useRef(false);
-  const frameSequenceRef                = useRef(0);
-  const gestureRef                      = useRef<FrameGesture | null>(null);
+  // OVERLAY model: the live portal is the REAL chromeless Chromium window the
+  // local engine (a Node child of the Tauri shell) opens and the shell positions
+  // over `frameRef`. No video, no WebRTC. The citizen touches the real portal
+  // directly; native concerns (uploads, OTP/VNeID/confirm) are requested over
+  // Tauri IPC — we hide the browser and show the overlay, then reply by command.
+  const frameRef                        = useRef<HTMLDivElement | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastBlobUrlRef = useRef<string | null>(null);
 
-  // URL-based frame (step screenshots / fallback): preload then swap to avoid flicker.
-  const pushFrame = useCallback((url: string) => {
-    const sequence = ++frameSequenceRef.current;
-    const loader = new Image();
-    loader.decoding = "async";
-    loader.onload = () => {
-      if (sequence !== frameSequenceRef.current || !imgRef.current) return;
-      imgRef.current.src = url;
-      if (!hasScreenshotRef.current) {
-        hasScreenshotRef.current = true;
-        setHasScreenshot(true);
-      }
-    };
-    loader.src = url;
-  }, []);
-
-  // Binary live frame over WS → Blob URL, rendered instantly (no network GET).
-  const pushFrameBlob = useCallback((buf: ArrayBuffer) => {
-    const img = imgRef.current;
-    if (!img) return;
-    const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
-    img.src = url;
-    // Revoke the previous frame's URL once the new one is set (avoids leaks).
-    if (lastBlobUrlRef.current) URL.revokeObjectURL(lastBlobUrlRef.current);
-    lastBlobUrlRef.current = url;
-    if (!hasScreenshotRef.current) {
-      hasScreenshotRef.current = true;
-      setHasScreenshot(true);
-    }
-  }, []);
+  // Keep the real browser glued over the live-view frame while a real job runs.
+  useBrowserOverlay(frameRef, mode === "real" && isTauri());
 
   // Elapsed time counter
   useEffect(() => {
@@ -589,120 +527,83 @@ export function ProcedureSubmitScreen({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── WebSocket progress from real Selenium runner ───────────────────────────
+  // ── Drive the local automation engine over Tauri IPC (OVERLAY model) ───────
+  // The engine runs Playwright on THIS machine (a Node child of the Tauri shell)
+  // and opens a chromeless Chromium over `frameRef` (positioned by
+  // useBrowserOverlay). The API is never in the media path. Job state (progress /
+  // terminal / input-requests) arrives as engine messages; the citizen touches
+  // the real portal directly, and replies to native prompts come back as commands.
   useEffect(() => {
     if (!currentJobId) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let socket: any = null;
     let disposed = false;
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
-    import("socket.io-client").then(({ io }) => {
-      if (disposed) return;
-      socket = io(`${wsUrl}/device`, { transports: ["websocket", "polling"] });
-      socket.on("connect", () => {
-        if (deviceSerial) socket.emit("heartbeat", { deviceId: deviceSerial });
-        // Subscribe to THIS job by id — the robust route that does not depend on
-        // deviceSerial being present in the job or matching the heartbeat key.
-        // Re-fires on every reconnect, so frames resume after a socket drop.
-        if (currentJobId) socket.emit("subscribe_job", { jobId: currentJobId });
-      });
-
-      socket.on("selenium:progress", (data: {
-        jobId: string;
-        status: string;
-        progressPercent: number;
-        currentStepOrder: number;
-        citizenMessage?: string;
-        outputData?: Record<string, unknown>;
-        failReason?: string;
-      }) => {
-        if (data.jobId !== currentJobId) return;
-
-        setProgressPct(data.progressPercent ?? 0);
-        if (data.citizenMessage) setLiveMsg(data.citizenMessage);
-        if (data.currentStepOrder !== undefined) {
-          const idx = Math.min(data.currentStepOrder, DEMO_STEPS.length - 1);
-          setStepStatus(prev => prev.map((_, i) => i < idx ? "done" : i === idx ? "active" : "pending"));
-          setActiveStep(idx);
-        }
-
-        // ── Terminal states from real runner ──────────────────────────
-        if (data.status === "COMPLETED") {
-          if (timerRef.current) clearTimeout(timerRef.current);
-          const realCode = data.outputData?.["applicationCode"];
-          if (realCode) setAppCode(String(realCode));
-          // Mark all steps done with a slight animation delay
-          setStepStatus(DEMO_STEPS.map(() => "done"));
-          setProgressPct(100);
-          setTimeout(() => setDone(true), 600);
-        } else if (data.status === "FAILED") {
-          if (timerRef.current) clearTimeout(timerRef.current);
-          const cur = activeStepRef.current;
-          setStepStatus(prev => prev.map((_, i) => i < cur ? "done" : i === cur ? "error" : "pending"));
-          setFailed(data.failReason ?? "Rất tiếc, quy trình nộp hồ sơ chưa hoàn tất. Vui lòng thử lại hoặc nhờ nhân viên hỗ trợ.");
-        }
-      });
-
-      socket.on("selenium:needs_input", (data: { jobId: string; inputType: string }) => {
-        if (data.jobId !== currentJobId) return;
-        setInteraction(data.inputType as InteractionType);
+    const onProgress = (data: {
+      status?: string; progressPercent?: number; currentStepOrder?: number;
+      citizenMessage?: string; outputData?: Record<string, unknown>; failReason?: string; pageUrl?: string;
+    }) => {
+      if (data.progressPercent !== undefined) setProgressPct(data.progressPercent);
+      if (data.citizenMessage) setLiveMsg(data.citizenMessage);
+      if (data.pageUrl) setCurrentUrl(cur => cur === data.pageUrl ? cur : data.pageUrl!);
+      if (data.currentStepOrder !== undefined) {
+        const idx = Math.min(data.currentStepOrder, DEMO_STEPS.length - 1);
+        setStepStatus(prev => prev.map((_, i) => i < idx ? "done" : i === idx ? "active" : "pending"));
+        setActiveStep(idx);
+      }
+      if (data.status === "COMPLETED") {
         if (timerRef.current) clearTimeout(timerRef.current);
-      });
+        const realCode = data.outputData?.["applicationCode"];
+        if (realCode) setAppCode(String(realCode));
+        setStepStatus(DEMO_STEPS.map(() => "done"));
+        setProgressPct(100);
+        setTimeout(() => setDone(true), 600);
+      } else if (data.status === "FAILED") {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        const cur = activeStepRef.current;
+        setStepStatus(prev => prev.map((_, i) => i < cur ? "done" : i === cur ? "error" : "pending"));
+        setFailed(data.failReason ?? "Rất tiếc, quy trình nộp hồ sơ chưa hoàn tất. Vui lòng thử lại hoặc nhờ nhân viên hỗ trợ.");
+      }
+    };
 
-      // Live binary frame (primary, low-latency) — JPEG bytes over the WS.
-      socket.on("selenium:frame", (data: { jobId: string; data: ArrayBuffer; pageUrl?: string }) => {
-        if (data.jobId !== currentJobId || !data.data) return;
-        pushFrameBlob(data.data);
-        if (data.pageUrl) {
-          setCurrentUrl(current => current === data.pageUrl ? current : data.pageUrl!);
-        }
-      });
+    const offMsg = onEngineMessage((msg) => {
+      if (disposed) return;
+      if (msg.evt === "ready") {
+        setHasScreenshot(true);
+      } else if (msg.evt === "progress") {
+        onProgress(msg);
+      } else if (msg.evt === "request-input") {
+        // Engine hides the real browser; show our native overlay for the reply.
+        setInteraction(msg.kind as InteractionType);
+        if (timerRef.current) clearTimeout(timerRef.current);
+      } else if (msg.evt === "error") {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        setFailed(typeof msg.message === "string" ? msg.message
+          : "Phiên tự động gặp lỗi. Vui lòng thử lại hoặc nhờ nhân viên hỗ trợ.");
+      }
+    });
 
-      // Step screenshot (persisted) / fallback — URL-based.
-      // Live frames already arrive via the binary `selenium:frame` channel, so
-      // skip the live.jpg URL here to avoid double-rendering / flicker.
-      socket.on("selenium:screenshot", (data: { jobId: string; screenshotUrl: string; pageUrl?: string }) => {
-        if (data.jobId !== currentJobId) return;
-        if (data.screenshotUrl?.includes("/live.jpg")) return;
-        const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
-        pushFrame(`${apiBase}${data.screenshotUrl}?t=${Date.now()}`);
-        if (data.pageUrl) {
-          setCurrentUrl(current => current === data.pageUrl ? current : data.pageUrl!);
-        }
-      });
-
-      // Runner reports a text input is focused → auto-show the virtual keyboard
-      socket.on("selenium:input_focus", (data: { jobId: string; focused: boolean }) => {
-        if (data.jobId !== currentJobId) return;
-        if (data.focused) setShowKeyboard(true);
-      });
-
-      // File uploaded (phone or kiosk) → close the upload overlay
-      socket.on("selenium:upload_received", (data: { jobId: string }) => {
-        if (data.jobId !== currentJobId) return;
-        setInteraction(prev => (prev === "UPLOAD" ? null : prev));
-      });
+    // Kick off the job. The engine is normally already up (spawned at app start),
+    // so send immediately; also (re)send if the engine (re)spawns after a crash.
+    engineSend({ cmd: "start-job", jobId: currentJobId });
+    const offStatus = onEngineStatus(({ ready }) => {
+      if (ready && !disposed) engineSend({ cmd: "start-job", jobId: currentJobId });
     });
 
     return () => {
       disposed = true;
-      socket?.disconnect();
-      if (lastBlobUrlRef.current) { URL.revokeObjectURL(lastBlobUrlRef.current); lastBlobUrlRef.current = null; }
+      offMsg();
+      offStatus();
+      engineSend({ cmd: "stop" });
     };
-  }, [currentJobId, deviceSerial, pushFrame, pushFrameBlob]);
+  }, [currentJobId]);
 
   // ── Citizen interaction handlers ───────────────────────────────────────────
   function handleInteractionDone(value?: string) {
+    const kind = interaction ?? "CONFIRM";
     setInteraction(null);
-    if (currentJobId) {
-      // Submit citizen input to runner (real mode) or ignore (demo)
-      seleniumApi.submitCitizenInput(currentJobId, {
-        inputType: interaction ?? "CONFIRM",
-        value,
-      }).catch(() => {});
-    }
-    // In demo mode, advance the simulation; in real mode the runner drives progress
+    // Reply to the engine's request-input over Tauri IPC (real mode). The engine
+    // then brings the real browser back over the frame and continues.
+    engineSend({ cmd: "citizen-input", kind, value });
+    // In demo mode, advance the simulation; in real mode the engine drives progress
     if (mode === "demo") {
       timerRef.current = setTimeout(() => advanceStep(activeStep + 1), 400);
     }
@@ -714,114 +615,10 @@ export function ProcedureSubmitScreen({
     onHome();
   }
 
-  // ── Interactive remote control ─────────────────────────────────────────────
-  function mapFramePoint(clientX: number, clientY: number): FramePoint | null {
-    const img = imgRef.current;
-    if (!img) return null;
-    const rect = img.getBoundingClientRect();
-    // Map against the runner's LOGICAL viewport (1366×900 CSS px), not the
-    // image's natural pixels — the frame is captured at 2× so naturalWidth is
-    // 2732, but the runner expects clicks in logical coordinates.
-    const natW = RUNNER_VIEW_W, natH = RUNNER_VIEW_H;
-    const scale = Math.min(rect.width / natW, rect.height / natH);
-    if (!scale) return null;
-    const offsetX = (rect.width - natW * scale) / 2;
-    const offsetY = (rect.height - natH * scale) / 2;
-    const x = (clientX - rect.left - offsetX) / scale;
-    const y = (clientY - rect.top - offsetY) / scale;
-    if (x < 0 || y < 0 || x > natW || y > natH) return null;
-    return { x: Math.round(x), y: Math.round(y) };
-  }
-
-  function flushTouchMove() {
-    const gesture = gestureRef.current;
-    if (!gesture || !gesture.pendingPoint || !currentJobId) return;
-    const point = gesture.pendingPoint;
-    gesture.pendingPoint = null;
-    gesture.flushTimer = null;
-    gesture.lastSentAt = performance.now();
-    seleniumApi.interact(currentJobId, { type: "touchMove", ...point }).catch(() => {});
-  }
-
-  function queueTouchMove(point: FramePoint) {
-    const gesture = gestureRef.current;
-    if (!gesture) return;
-    gesture.pendingPoint = point;
-    const wait = Math.max(0, 45 - (performance.now() - gesture.lastSentAt));
-    if (wait === 0) {
-      flushTouchMove();
-    } else if (gesture.flushTimer === null) {
-      gesture.flushTimer = window.setTimeout(flushTouchMove, wait);
-    }
-  }
-
-  function handleFramePointerDown(e: React.PointerEvent<HTMLImageElement>) {
-    if (mode !== "real" || !currentJobId) return;
-    const point = mapFramePoint(e.clientX, e.clientY);
-    if (!point) return;
-    e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    gestureRef.current = {
-      pointerId: e.pointerId,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      moved: false,
-      lastSentAt: performance.now(),
-      pendingPoint: null,
-      flushTimer: null,
-    };
-    seleniumApi.interact(currentJobId, { type: "touchStart", ...point }).catch(() => {});
-  }
-
-  function handleFramePointerMove(e: React.PointerEvent<HTMLImageElement>) {
-    const gesture = gestureRef.current;
-    if (!gesture || gesture.pointerId !== e.pointerId) return;
-    const point = mapFramePoint(e.clientX, e.clientY);
-    if (!point) return;
-    e.preventDefault();
-    if (Math.hypot(e.clientX - gesture.startClientX, e.clientY - gesture.startClientY) > 6) {
-      gesture.moved = true;
-    }
-    queueTouchMove(point);
-  }
-
-  function finishFrameGesture(e: React.PointerEvent<HTMLImageElement>) {
-    const gesture = gestureRef.current;
-    if (!gesture || gesture.pointerId !== e.pointerId || !currentJobId) return;
-    e.preventDefault();
-    if (gesture.flushTimer !== null) window.clearTimeout(gesture.flushTimer);
-    const point = mapFramePoint(e.clientX, e.clientY) ?? gesture.pendingPoint;
-    if (point && gesture.moved) {
-      seleniumApi.interact(currentJobId, { type: "touchMove", ...point }).catch(() => {});
-    }
-    seleniumApi.interact(currentJobId, {
-      type: "touchEnd",
-      ...(point ?? {}),
-    }).catch(() => {});
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    }
-    gestureRef.current = null;
-  }
-
-  function handleFramePointerCancel(e: React.PointerEvent<HTMLImageElement>) {
-    const gesture = gestureRef.current;
-    if (!gesture || gesture.pointerId !== e.pointerId || !currentJobId) return;
-    if (gesture.flushTimer !== null) window.clearTimeout(gesture.flushTimer);
-    seleniumApi.interact(currentJobId, { type: "touchEnd" }).catch(() => {});
-    gestureRef.current = null;
-  }
-
-  const sendChar = (text: string) => { if (currentJobId) seleniumApi.interact(currentJobId, { type: "type", text }).catch(() => {}); };
-  const sendKey  = (key: "Backspace" | "Enter" | "Tab") => { if (currentJobId) seleniumApi.interact(currentJobId, { type: "key", key }).catch(() => {}); };
-  const sendScroll = (deltaY: number, deltaX = 0) => {
-    if (currentJobId) seleniumApi.interact(currentJobId, { type: "scroll", deltaX, deltaY }).catch(() => {});
-  };
-
+  // The citizen interacts with the REAL portal directly — when they're done with
+  // a manual step, this tells the engine to resume / finish.
   function handleFinish() {
-    if (!currentJobId) return;
-    seleniumApi.interact(currentJobId, { type: "finish" }).catch(() => {});
-    setShowKeyboard(false);
+    engineSend({ cmd: "finish" });
   }
 
   const currentStep = DEMO_STEPS[activeStep];
@@ -921,37 +718,11 @@ export function ProcedureSubmitScreen({
               </div>
             </div>
 
-            {/* Live portal content — real Playwright screenshot streamed from runner */}
-            <div style={{ flex: 1, overflow: "hidden", background: "#fff", position: "relative" }}>
-              <img
-                ref={imgRef}
-                alt="Cổng dịch vụ công"
-                onPointerDown={handleFramePointerDown}
-                onPointerMove={handleFramePointerMove}
-                onPointerUp={finishFrameGesture}
-                onPointerCancel={handleFramePointerCancel}
-                onWheel={e => {
-                  e.preventDefault();
-                  sendScroll(e.deltaY, e.deltaX);
-                }}
-                onContextMenu={e => e.preventDefault()}
-                draggable={false}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                  objectPosition: "top",
-                  background: "#fff",
-                  cursor: mode === "real" ? "grab" : "default",
-                  opacity: hasScreenshot ? 1 : 0,
-                  touchAction: "none",
-                  userSelect: "none",
-                  willChange: "contents",
-                  transform: "translateZ(0)",
-                }}
-              />
+            {/* Live portal — the REAL chromeless Chromium window is positioned
+                over this frame by the Tauri shell (useBrowserOverlay). The div
+                stays empty (the OS browser covers it); the placeholder shows
+                only until the browser appears. */}
+            <div ref={frameRef} style={{ flex: 1, overflow: "hidden", background: "#fff", position: "relative" }}>
               {!hasScreenshot && (
                 <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18, background: "#f8fafc" }}>
                   <Spinner size={40} color="var(--blue)" />
@@ -988,17 +759,10 @@ export function ProcedureSubmitScreen({
               ))}
             </div>
 
-            {/* Interactive controls — only in real mode */}
+            {/* The citizen touches the real portal directly — only a "done"
+                control is needed to resume/finish after a manual step. */}
             {mode === "real" && (
               <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                <button onClick={() => sendScroll(-500)} title="Cuộn lên"
-                  style={ctrlBtn}>▲</button>
-                <button onClick={() => sendScroll(500)} title="Cuộn xuống"
-                  style={ctrlBtn}>▼</button>
-                <button onClick={() => setShowKeyboard(v => !v)}
-                  style={{ ...ctrlBtn, width: "auto", padding: "0 16px", gap: 8, background: showKeyboard ? "var(--blue)" : "#fff", color: showKeyboard ? "#fff" : "var(--ink-2)", display: "flex", alignItems: "center" }}>
-                  <span style={{ fontSize: 18 }}>⌨</span> Bàn phím
-                </button>
                 <button onClick={handleFinish}
                   style={{ ...ctrlBtn, width: "auto", padding: "0 18px", gap: 8, background: "var(--green)", color: "#fff", border: "none", fontWeight: 800, display: "flex", alignItems: "center" }}>
                   <Icon name="check" size={18} style={{ color: "#fff" }} /> Tôi đã hoàn tất
@@ -1099,8 +863,11 @@ export function ProcedureSubmitScreen({
       {interaction === "CAPTCHA_WAIT" && (
         <CaptchaOverlay onClose={() => handleInteractionDone("STAFF_RESOLVED")} />
       )}
-      {interaction === "UPLOAD" && currentJobId && (
-        <UploadOverlay jobId={currentJobId} onCancel={() => setInteraction(null)} />
+      {interaction === "UPLOAD" && (
+        <UploadOverlay
+          onPicked={(path) => { engineSend({ cmd: "upload-file", path }); setInteraction(null); }}
+          onCancel={() => setInteraction(null)}
+        />
       )}
 
       {/* ── Done overlay ─────────────────────────────────────────────────────── */}
@@ -1130,14 +897,6 @@ export function ProcedureSubmitScreen({
         </OverlayWrap>
       )}
 
-      {/* ── On-screen keyboard for interactive remote control ────────────────── */}
-      {showKeyboard && mode === "real" && !done && !failed && (
-        <VirtualKeyboard
-          onChar={sendChar}
-          onKey={sendKey}
-          onClose={() => setShowKeyboard(false)}
-        />
-      )}
     </div>
   );
 }

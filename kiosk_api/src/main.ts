@@ -10,10 +10,10 @@ import { AppModule } from "./app.module";
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  // Live JPEG frames arrive as base64 JSON — raise the body limit well above the
-  // 100kb express default so 2× screenshots (~0.5–1MB base64) aren't rejected.
-  app.use(express.json({ limit: '8mb' }));
-  app.use(express.urlencoded({ limit: '8mb', extended: true }));
+  // Live frames no longer pass through the API (WebRTC P2P now), so the body
+  // limit can return to a sane size — just enough for normal JSON payloads.
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.urlencoded({ limit: '1mb', extended: true }));
   app.useStaticAssets(path.join(process.cwd(), 'uploads'), { prefix: '/uploads' });
   app.enableCors({
     origin: true,

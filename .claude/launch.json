@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kiosk_client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "kiosk_client", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}

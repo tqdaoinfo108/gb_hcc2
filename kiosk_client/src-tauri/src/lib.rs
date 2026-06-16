@@ -1,8 +1,21 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::Duration;
 use sysinfo::{Components, Disks, System};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
+
+/// When true, kiosk lock is lifted so the admin can move/resize the window for dev work.
+static DEV_MODE: AtomicBool = AtomicBool::new(false);
+/// When true, a real chromeless Chromium window is overlaying the kiosk frame.
+/// The Tauri window must NOT be always-on-top while this is set, or it would
+/// cover the overlay browser. Also suppresses the focus-loss re-lock.
+static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize)]
 struct DeviceMetrics {
@@ -217,12 +230,81 @@ impl<R: tauri::Runtime> KioskWindowControls for tauri::WebviewWindow<R> {
 }
 
 fn enforce_kiosk_window(window: &impl KioskWindowControls) {
+  if DEV_MODE.load(Ordering::Relaxed) || OVERLAY_ACTIVE.load(Ordering::Relaxed) { return; }
   window.kiosk_decorations(false);
   window.kiosk_resizable(false);
   window.kiosk_always_on_top(true);
   window.kiosk_skip_taskbar(true);
   window.kiosk_fullscreen(true);
   window.kiosk_focus();
+}
+
+/// Force the overlay Chromium window(s) to be top-most so they float ABOVE the
+/// (fullscreen) Tauri window — which otherwise covers them whenever it regains
+/// focus, leaving the live-view frame blank/white. The real browser only covers
+/// the frame rect, so the kiosk UI around it stays visible and clickable.
+/// No-op off Windows / when overlay isn't active.
+#[cfg(windows)]
+unsafe extern "system" fn raise_overlay_cb(
+  hwnd: windows_sys::Win32::Foundation::HWND,
+  exclude: windows_sys::Win32::Foundation::LPARAM,
+) -> i32 {
+  use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetClassNameW, IsWindowVisible, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+  };
+  if (hwnd as isize) == (exclude as isize) { return 1; }
+  if IsWindowVisible(hwnd) == 0 { return 1; }
+  let mut buf = [0u16; 64];
+  let n = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+  if n > 0 {
+    let class = String::from_utf16_lossy(&buf[..n as usize]);
+    // Top-level Playwright Chromium windows are class "Chrome_WidgetWin_1".
+    // (Tauri's own WebView2 is a CHILD window, so EnumWindows won't list it.)
+    if class == "Chrome_WidgetWin_1" {
+      SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+  }
+  1
+}
+
+#[tauri::command]
+fn raise_overlay_browser(app: tauri::AppHandle) {
+  if !OVERLAY_ACTIVE.load(Ordering::Relaxed) { return; }
+  #[cfg(windows)]
+  {
+    use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
+    let exclude = app
+      .get_webview_window("main")
+      .and_then(|w| w.hwnd().ok())
+      .map(|h| h.0 as isize)
+      .unwrap_or(0);
+    unsafe { EnumWindows(Some(raise_overlay_cb), exclude as windows_sys::Win32::Foundation::LPARAM); }
+  }
+  #[cfg(not(windows))]
+  { let _ = app; }
+}
+
+/// Ctrl+Alt+F2 from the WebView: toggle between fullscreen kiosk and a normal
+/// resizable windowed mode for development/recording without a rebuild.
+/// Returns the new dev-mode state (true = windowed).
+#[tauri::command]
+fn toggle_dev_window(app: tauri::AppHandle) -> bool {
+  let now_dev = !DEV_MODE.load(Ordering::SeqCst);
+  DEV_MODE.store(now_dev, Ordering::SeqCst);
+  if let Some(window) = app.get_webview_window("main") {
+    if now_dev {
+      let _ = window.set_fullscreen(false);
+      let _ = window.set_decorations(true);
+      let _ = window.set_always_on_top(false);
+      let _ = window.set_skip_taskbar(false);
+      let _ = window.set_resizable(true);
+      let _ = window.set_size(tauri::LogicalSize::new(1400_f64, 900_f64));
+    } else {
+      DEV_MODE.store(false, Ordering::SeqCst); // already stored, but make intent clear
+      enforce_kiosk_window(&window);
+    }
+  }
+  now_dev
 }
 
 #[cfg(windows)]
@@ -258,9 +340,10 @@ mod windows_kiosk {
         std::process::exit(0);
       }
 
+      let dev = super::DEV_MODE.load(super::Ordering::Relaxed);
       let blocked = key == VK_LWIN
         || key == VK_RWIN
-        || (key == VK_TAB && alt)
+        || (!dev && key == VK_TAB && alt) // allow Alt+Tab in dev/windowed mode
         || (key == VK_ESCAPE && (alt || ctrl))
         || (key == VK_F4 && alt)
         || (key == VK_ESCAPE && ctrl && shift);
@@ -425,14 +508,187 @@ fn voice_stop() -> Result<(), String> {
   { Ok(()) }
 }
 
+/* ─────────────────── Automation engine (Tauri-first) ───────────────────
+ * The Playwright + WebRTC automation engine (automation-core/bin/engine.js)
+ * runs as ONE Node child process that this Rust shell spawns and SUPERVISES
+ * (auto-restart with backoff — a crash mid-session must never brick the kiosk).
+ * It serves both roles (recorder authoring / executor runtime) selected per
+ * command. There is NO localhost WebSocket and NO port: control + WebRTC SDP/ICE
+ * are newline-delimited JSON over the child's stdin/stdout, and this shell
+ * relays each line to/from the WebView over Tauri IPC —
+ *   • engine stdout (JSON line) → emit `engine://message` to the WebView
+ *   • WebView `engine_send`      → write a JSON line to the engine's stdin
+ *   • spawn/exit                 → emit `engine://status` { ready }
+ * Native document picking is fulfilled by `pick_document`; the local file path
+ * is fed back over the WebRTC DataChannel. */
+
+#[derive(Default)]
+struct EngineState {
+  stdin: Mutex<Option<ChildStdin>>,
+}
+
+/// Resolve (node_exe, entry_js) for the engine — bundled resources in prod,
+/// ENGINE_ENTRY env in dev. Returns None when neither is available.
+fn resolve_engine(app: &tauri::AppHandle) -> Option<(String, String)> {
+  if let Ok(entry) = app
+    .path()
+    .resolve("resources/automation-core/bin/engine.js", tauri::path::BaseDirectory::Resource)
+  {
+    if entry.exists() {
+      let node = app
+        .path()
+        .resolve("resources/node/node.exe", tauri::path::BaseDirectory::Resource)
+        .ok()
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "node".to_string());
+      return Some((node, entry.to_string_lossy().to_string()));
+    }
+  }
+  if let Ok(entry) = std::env::var("ENGINE_ENTRY") {
+    let node = std::env::var("ENGINE_NODE").unwrap_or_else(|_| "node".to_string());
+    return Some((node, entry));
+  }
+  // Dev fallback (`tauri dev`, unbundled): walk up from the working dir looking
+  // for the sibling automation-core package in the repo.
+  if let Ok(mut dir) = std::env::current_dir() {
+    for _ in 0..6 {
+      let candidate = dir.join("automation-core").join("bin").join("engine.js");
+      if candidate.exists() {
+        let node = std::env::var("ENGINE_NODE").unwrap_or_else(|_| "node".to_string());
+        return Some((node, candidate.to_string_lossy().to_string()));
+      }
+      if !dir.pop() {
+        break;
+      }
+    }
+  }
+  None
+}
+
+fn spawn_engine(app: tauri::AppHandle) {
+  let (node, entry) = match resolve_engine(&app) {
+    Some(v) => v,
+    None => {
+      eprintln!("[engine] not found (no bundled resource, no ENGINE_ENTRY) — automation disabled");
+      return;
+    }
+  };
+  let api_base = std::env::var("TAURI_API_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+  // 'executor' = kiosk runtime (registers as a runner); 'recorder' = admin authoring.
+  let role = std::env::var("ENGINE_ROLE").unwrap_or_else(|_| "executor".to_string());
+  let browsers = app
+    .path()
+    .resolve("resources/chromium", tauri::path::BaseDirectory::Resource)
+    .ok()
+    .filter(|p| p.exists());
+
+  std::thread::spawn(move || loop {
+    let mut cmd = Command::new(&node);
+    cmd.arg(&entry)
+      .env("API_BASE", &api_base)
+      .env("ENGINE_ROLE", &role)
+      .env("BROWSER_MODE", "hidden")
+      .stdin(Stdio::piped())
+      .stdout(Stdio::piped())
+      .stderr(Stdio::inherit());
+    if let Some(b) = &browsers {
+      cmd.env("PLAYWRIGHT_BROWSERS_PATH", b);
+    }
+    match cmd.spawn() {
+      Ok(mut child) => {
+        if let Some(stdin) = child.stdin.take() {
+          if let Some(state) = app.try_state::<EngineState>() {
+            *state.stdin.lock().unwrap() = Some(stdin);
+          }
+        }
+        let _ = app.emit("engine://status", serde_json::json!({ "ready": true }));
+        if let Some(out) = child.stdout.take() {
+          for line in BufReader::new(out).lines().map_while(Result::ok) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+              continue;
+            }
+            // stdout is the protocol stream (JSON lines); anything else is a log.
+            match serde_json::from_str::<serde_json::Value>(trimmed) {
+              Ok(value) => { let _ = app.emit("engine://message", value); }
+              Err(_) => eprintln!("[engine] {trimmed}"),
+            }
+          }
+        }
+        let _ = child.wait();
+      }
+      Err(e) => eprintln!("[engine] spawn failed: {e}"),
+    }
+    if let Some(state) = app.try_state::<EngineState>() {
+      *state.stdin.lock().unwrap() = None;
+    }
+    let _ = app.emit("engine://status", serde_json::json!({ "ready": false }));
+    eprintln!("[engine] exited — restarting in 3s");
+    std::thread::sleep(Duration::from_secs(3));
+  });
+}
+
+/// Relay one control/signaling message from the WebView to the engine (stdin).
+#[tauri::command]
+fn engine_send(state: tauri::State<EngineState>, msg: serde_json::Value) -> Result<(), String> {
+  let mut guard = state.stdin.lock().map_err(|e| e.to_string())?;
+  let stdin = guard
+    .as_mut()
+    .ok_or_else(|| "Engine tự động hoá chưa sẵn sàng".to_string())?;
+  let mut line = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+  line.push('\n');
+  stdin.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+  stdin.flush().map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+/// Toggle overlay mode: while a real chromeless Chromium window is positioned
+/// over the kiosk frame, drop the Tauri window's always-on-top so the overlay
+/// is visible. Called by the recorder / executor screens on mount/unmount.
+#[tauri::command]
+fn set_overlay_active(app: tauri::AppHandle, active: bool) {
+  OVERLAY_ACTIVE.store(active, Ordering::SeqCst);
+  if let Some(window) = app.get_webview_window("main") {
+    if active {
+      let _ = window.set_always_on_top(false);
+    } else {
+      // Restore kiosk lock unless we're in dev/windowed mode.
+      enforce_kiosk_window(&window);
+    }
+  }
+}
+
+/// Pick a document natively and return its absolute LOCAL path. The engine
+/// feeds the path straight into Playwright setInputFiles (no upload/download —
+/// same machine). source: 'file' | 'qr' | 'scanner'.
+#[tauri::command]
+async fn pick_document(app: tauri::AppHandle, source: String) -> Result<serde_json::Value, String> {
+  tauri::async_runtime::spawn_blocking(move || match source.as_str() {
+    "file" => app
+      .dialog()
+      .file()
+      .blocking_pick_file()
+      .and_then(|f| f.as_path().map(|p| p.to_string_lossy().to_string()))
+      .map(|path| serde_json::json!({ "path": path }))
+      .ok_or_else(|| "cancelled".to_string()),
+    _ => Err("Tải tài liệu qua QR/máy quét chưa được cấu hình trên thiết bị này.".to_string()),
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
 pub fn run() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
+    .manage(EngineState::default())
     .setup(|app| {
       if let Some(window) = app.get_webview_window("main") {
         enforce_kiosk_window(&window);
       }
       #[cfg(windows)]
       windows_kiosk::install_keyboard_lock();
+      spawn_engine(app.handle().clone());
       Ok(())
     })
     .on_window_event(|window, event| match event {
@@ -451,7 +707,12 @@ pub fn run() {
       shutdown_device,
       health_check,
       voice_start,
-      voice_stop
+      voice_stop,
+      engine_send,
+      pick_document,
+      toggle_dev_window,
+      set_overlay_active,
+      raise_overlay_browser
     ])
     .run(tauri::generate_context!())
     .expect("error while running smart kiosk");

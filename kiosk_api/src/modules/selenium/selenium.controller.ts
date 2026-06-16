@@ -1,7 +1,6 @@
 import {
-  Controller, Get, Post, Patch, Put, Delete, Param, Body, Query, HttpCode, Res,
+  Controller, Get, Post, Patch, Put, Delete, Param, Body, Query,
 } from '@nestjs/common';
-import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { WorkflowTemplateService } from './workflow-template.service';
 import { SeleniumRunnerService } from './selenium-runner.service';
@@ -11,8 +10,7 @@ import {
   CreateWorkflowStepDto, UpdateWorkflowStepDto,
   RegisterRunnerDto, RunnerHeartbeatDto,
   DispatchJobDto, UpdateJobStatusDto, AddJobLogDto, AddScreenshotDto,
-  CitizenInputDto, RequestInputDto, InteractEventDto, ReportFocusDto,
-  StartRecordingDto, RecordActionDto, ReplaceStepsDto, LiveFrameDto,
+  ReplaceStepsDto,
 } from './selenium.dto';
 
 // ─── Workflow Templates ───────────────────────────────────────────────────────
@@ -70,14 +68,9 @@ export class WorkflowTemplateController {
     return this.templates.removeStep(stepId);
   }
 
-  // ─── Recorder ──────────────────────────────────────────────────────────────
-
-  @Post(':id/record')
-  @ApiOperation({ summary: 'Start a record session for this template (opens its target URL)' })
-  async record(@Param('id') id: string, @Body() body: StartRecordingDto) {
-    const tpl = await this.templates.findById(id);
-    return this.jobs.startRecording({ templateId: tpl.id, url: body.url || tpl.targetUrl });
-  }
+  // ─── Recorder save ───────────────────────────────────────────────────────
+  // Recording itself runs P2P between the CMS and the local recorder agent
+  // (WebRTC, no API). The CMS only persists the finished steps here.
 
   @Put(':id/steps')
   @ApiOperation({ summary: 'Replace ALL steps of a template (recorder save)' })
@@ -192,26 +185,6 @@ export class SeleniumJobController {
     return this.jobs.addScreenshot(id, body);
   }
 
-  @Post(':id/frame')
-  @HttpCode(200)
-  @ApiOperation({ summary: 'Runner: push a live JPEG frame, relayed as binary over WS' })
-  frame(@Param('id') id: string, @Body() body: LiveFrameDto) {
-    return this.jobs.pushLiveFrame(id, body);
-  }
-
-  @Get(':id/live.jpg')
-  @ApiOperation({ summary: 'Latest in-memory live frame for a job (image/jpeg)' })
-  liveFrame(@Param('id') id: string, @Res() res: Response) {
-    const buf = this.jobs.getLiveFrame(id);
-    if (!buf) { res.status(204).end(); return; }
-    res.set({
-      'Content-Type': 'image/jpeg',
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
-      'Content-Length': String(buf.length),
-    });
-    res.end(buf);
-  }
-
   @Get(':id/screenshots')
   @ApiOperation({ summary: 'Get screenshots for a job' })
   getScreenshots(@Param('id') id: string) { return this.jobs.getScreenshots(id); }
@@ -222,61 +195,7 @@ export class SeleniumJobController {
     return this.jobs.dequeueForRunner(runnerId, limit ? +limit : 5);
   }
 
-  // ─── Citizen Interaction ──────────────────────────────────────────────────
-
-  @Post(':id/request-input')
-  @ApiOperation({ summary: 'Runner: pause job and request citizen interaction (OTP/VNeID/CAPTCHA/Confirm)' })
-  requestInput(@Param('id') id: string, @Body() body: RequestInputDto) {
-    return this.jobs.requestCitizenInput(id, body.inputType, body.payload);
-  }
-
-  @Post(':id/citizen-input')
-  @HttpCode(200)
-  @ApiOperation({ summary: 'Kiosk: submit citizen response (OTP value, confirmation, etc.)' })
-  citizenInput(@Param('id') id: string, @Body() body: CitizenInputDto) {
-    return this.jobs.submitCitizenInput(id, body);
-  }
-
-  @Get(':id/poll-input')
-  @ApiOperation({ summary: 'Runner: poll for pending citizen input (short-poll)' })
-  pollInput(@Param('id') id: string) {
-    return this.jobs.pollCitizenInput(id);
-  }
-
-  // ─── Interactive remote control ───────────────────────────────────────────
-
-  @Post(':id/interact')
-  @HttpCode(200)
-  @ApiOperation({ summary: 'Kiosk: send a tap/key/scroll/finish event to the live browser' })
-  interact(@Param('id') id: string, @Body() body: InteractEventDto) {
-    return this.jobs.enqueueInteraction(id, body);
-  }
-
-  @Get(':id/interactions')
-  @ApiOperation({ summary: 'Runner: drain queued interaction events (short-poll)' })
-  interactions(@Param('id') id: string) {
-    return this.jobs.drainInteractions(id);
-  }
-
-  @Post(':id/report-focus')
-  @HttpCode(200)
-  @ApiOperation({ summary: 'Runner: report whether a text input is focused (auto keyboard)' })
-  reportFocus(@Param('id') id: string, @Body() body: ReportFocusDto) {
-    return this.jobs.reportInputFocus(id, body.focused);
-  }
-
-  // ─── Recorder ──────────────────────────────────────────────────────────────
-
-  @Post(':id/record-action')
-  @HttpCode(200)
-  @ApiOperation({ summary: 'Runner: report a captured action during recording' })
-  recordAction(@Param('id') id: string, @Body() body: RecordActionDto) {
-    return this.jobs.recordAction(id, body as any);
-  }
-
-  @Get(':id/recording')
-  @ApiOperation({ summary: 'CMS: fetch the buffered recorded actions for a record job' })
-  recording(@Param('id') id: string) {
-    return this.jobs.getRecording(id);
-  }
+  // NOTE: live frames, interactive control, citizen-input and recorder actions
+  // used to be HTTP-relayed here. They now flow P2P over the WebRTC DataChannel
+  // (localhost) between each kiosk/CMS and its local automation host. Removed.
 }

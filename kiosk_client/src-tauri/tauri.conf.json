@@ -24,7 +24,8 @@
         "maximizable": false,
         "minimizable": false,
         "closable": false,
-        "focus": true
+        "focus": true,
+        "additionalBrowserArgs": "--disable-features=WebRtcHideLocalIpsWithMdns"
       }
     ],
     "security": {

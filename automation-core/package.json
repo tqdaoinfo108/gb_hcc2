@@ -1,0 +1,16 @@
+{
+  "name": "@smart-kiosk/automation-core",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Tauri-first Playwright automation engine (OVERLAY model). One Node process, spawned by the Tauri shell over stdio, serving both the recorder (authoring) and executor (kiosk) roles. The real chromeless Chromium window is positioned over the kiosk UI's frame — no WebRTC, no screencast, no native media deps.",
+  "main": "src/index.js",
+  "bin": {
+    "kiosk-engine": "bin/engine.js"
+  },
+  "scripts": {
+    "start": "node bin/engine.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}
