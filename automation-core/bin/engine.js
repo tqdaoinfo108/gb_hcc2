@@ -72,11 +72,15 @@ async function stopActive(reason) {
 const TITLEBAR_PX = Number(process.env.OVERLAY_TITLEBAR_PX || 0);
 
 async function positionActive(bounds) {
-  if (!session || !session.page || !bounds) return;
+  if (!session || !session.page || !bounds) {
+    log('positionActive skipped', { hasSession: !!session, hasPage: !!(session && session.page), hasBounds: !!bounds });
+    return;
+  }
   const b = TITLEBAR_PX
     ? { left: bounds.left, top: bounds.top - TITLEBAR_PX, width: bounds.width, height: bounds.height + TITLEBAR_PX }
     : bounds;
-  await core.setPageWindowBounds(session.page, b).catch(() => undefined);
+  log('position →', b);
+  await core.setPageWindowBounds(session.page, b).catch((e) => log('setWindowBounds failed', e && e.message));
 }
 /** Hide the real browser so a WebView overlay (OTP/VNeID/upload/confirm) shows. */
 async function hideBrowser() {
@@ -94,7 +98,28 @@ function guardPage(page) {
     log('page crashed');
     try { conn.send({ evt: 'error', message: 'Trang bị treo (crash) — vui lòng thử lại.' }); } catch { /* ignore */ }
   });
-  page.on('pageerror', () => { /* page JS error — not fatal, ignore */ });
+  // Diagnostics: why does dynamic content (e.g. the VNeID QR) fail to render in
+  // the overlay browser but not a normal browser? Surface console errors, page
+  // JS errors, blocked requests, and 4xx/5xx responses to stderr.
+  if (process.env.ENGINE_DEBUG_PAGE !== '0') {
+    page.on('console', (m) => { if (m.type() === 'error') log('console.error:', m.text().slice(0, 300)); });
+    page.on('pageerror', (e) => log('pageerror:', (e && e.message || String(e)).slice(0, 300)));
+    page.on('requestfailed', (r) => {
+      const f = r.failure();
+      log('requestfailed:', r.method(), r.url().slice(0, 160), '—', f && f.errorText);
+    });
+    page.on('response', (r) => {
+      const s = r.status();
+      if (s >= 400) log('http', s, r.request().method(), r.url().slice(0, 160));
+    });
+    page.on('websocket', (ws) => {
+      log('ws open:', ws.url().slice(0, 160));
+      ws.on('socketerror', (err) => log('ws error:', ws.url().slice(0, 120), '—', err));
+      ws.on('close', () => log('ws close:', ws.url().slice(0, 120)));
+    });
+  } else {
+    page.on('pageerror', () => { /* suppressed */ });
+  }
 }
 
 /* ══════════════════════ RECORDER role ══════════════════════ */
@@ -102,7 +127,8 @@ async function startRecord(payload) {
   await stopActive('superseded');
   const url = payload.url || 'https://dichvucong.gov.vn/';
   if (payload.bounds) lastBounds = payload.bounds;
-  log('start-record →', url);
+  const onscreen = lastBounds && lastBounds.left > -10000;
+  log('start-record →', url, 'bounds:', lastBounds, onscreen ? '(on-screen)' : '(OFF-SCREEN — waiting for set-bounds)');
 
   const { context, browser, page } = await core.launchAppWindow({ url, bounds: lastBounds });
   session = { kind: 'record', browser, context, page, lastInput: Date.now(), idleTimer: null };
@@ -141,17 +167,27 @@ async function startRecord(payload) {
   }, 15000);
 }
 
-/** Admin "preview fill" — type a value into the real page to sanity-check. */
+/** Admin "preview fill" — type a value into the real page to sanity-check.
+ * Searches every frame (the form may sit in an embedded iframe). */
 async function previewFill(msg) {
   if (!session || session.kind !== 'record' || !msg.selector) return;
   session.lastInput = Date.now();
-  try {
-    await session.page.locator(msg.selector).first().fill(msg.text || '', { timeout: 5000 });
-  } catch {
+  const sel = msg.selectorType === 'XPATH' ? `xpath=${msg.selector}`
+    : msg.selectorType === 'ID' ? `#${msg.selector}`
+    : msg.selectorType === 'NAME' ? `[name="${msg.selector}"]`
+    : msg.selector;
+  for (const frame of session.page.frames()) {
     try {
-      await session.page.locator(msg.selector).first().click({ timeout: 3000 });
-      await session.page.keyboard.type(msg.text || '', { delay: 10 });
-    } catch { /* ignore */ }
+      const loc = frame.locator(sel).first();
+      if ((await loc.count().catch(() => 0)) === 0) continue;
+      try {
+        await loc.fill(msg.text || '', { timeout: 5000 });
+      } catch {
+        await loc.click({ timeout: 3000 });
+        await session.page.keyboard.type(msg.text || '', { delay: 10 });
+      }
+      return;
+    } catch { /* try next frame */ }
   }
 }
 
@@ -252,6 +288,8 @@ async function runJob(payload) {
   const firstNavigates = steps[0] && ['OPEN_URL', 'NAVIGATE'].includes(steps[0].stepType);
   const initialUrl = firstNavigates ? (steps[0].url || job.template?.targetUrl) : (job.template?.targetUrl || 'about:blank');
 
+  const onscreen = lastBounds && lastBounds.left > -10000;
+  log(`job ${jobId} launching →`, initialUrl, 'bounds:', lastBounds, onscreen ? '(on-screen)' : '(OFF-SCREEN — waiting for set-bounds)');
   const { context, browser, page } = await core.launchAppWindow({ url: initialUrl, bounds: lastBounds });
   guardPage(page);
   context.on('page', (np) => {

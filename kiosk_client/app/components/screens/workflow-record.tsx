@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { engineSend, onEngineMessage, onEngineStatus, isTauri } from "../../lib/engine-bridge";
+import { engineSend, onEngineMessage, onEngineStatus, isTauri, computeOverlayBounds, raiseOverlayBrowser } from "../../lib/engine-bridge";
 import { useBrowserOverlay } from "../../lib/use-browser-overlay";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
@@ -289,6 +289,11 @@ function RecorderSurface({ template, onExit }: { template: TemplateLite; onExit:
       } else if (msg.evt === "ready") {
         setReady(true);
         setStatus("live");
+        // The real window just opened — lift it above the fullscreen Tauri
+        // window right away (a few times, since launch + first paint races).
+        void raiseOverlayBrowser();
+        window.setTimeout(() => void raiseOverlayBrowser(), 250);
+        window.setTimeout(() => void raiseOverlayBrowser(), 800);
       } else if (msg.evt === "page-url" && typeof msg.url === "string") {
         setCurrentUrl(msg.url);
       } else if (msg.evt === "error") {
@@ -296,9 +301,18 @@ function RecorderSurface({ template, onExit }: { template: TemplateLite; onExit:
       }
     });
 
-    engineSend({ cmd: "start-record", url: template.targetUrl });
+    // Launch the Chromium window DIRECTLY over the frame (not off-screen): send
+    // the frame's screen bounds with start-record so the engine never has to do
+    // an off-screen → on-screen jump (that race left the frame blank/white).
+    const begin = async () => {
+      let bounds = null;
+      const el = frameRef.current;
+      if (el) bounds = await computeOverlayBounds(el);
+      if (!disposed) engineSend({ cmd: "start-record", url: template.targetUrl, bounds: bounds ?? undefined });
+    };
+    void begin();
     const offStatus = onEngineStatus(({ ready: engineReady }) => {
-      if (engineReady && !disposed) engineSend({ cmd: "start-record", url: template.targetUrl });
+      if (engineReady && !disposed) void begin();
     });
 
     return () => {

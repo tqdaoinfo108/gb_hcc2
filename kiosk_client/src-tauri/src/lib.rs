@@ -340,16 +340,21 @@ mod windows_kiosk {
         std::process::exit(0);
       }
 
+      // In windowed dev mode (Ctrl+Alt+F2) the kiosk keyboard lock is fully
+      // lifted — Alt+Tab, the Windows key, Alt+F4, Ctrl+Esc etc. all work so it's
+      // comfortable to develop on Windows. Re-locks the moment you toggle back.
       let dev = super::DEV_MODE.load(super::Ordering::Relaxed);
-      let blocked = key == VK_LWIN
-        || key == VK_RWIN
-        || (!dev && key == VK_TAB && alt) // allow Alt+Tab in dev/windowed mode
-        || (key == VK_ESCAPE && (alt || ctrl))
-        || (key == VK_F4 && alt)
-        || (key == VK_ESCAPE && ctrl && shift);
+      if !dev {
+        let blocked = key == VK_LWIN
+          || key == VK_RWIN
+          || (key == VK_TAB && alt)
+          || (key == VK_ESCAPE && (alt || ctrl))
+          || (key == VK_F4 && alt)
+          || (key == VK_ESCAPE && ctrl && shift);
 
-      if blocked {
-        return 1;
+        if blocked {
+          return 1;
+        }
       }
     }
 
@@ -585,10 +590,16 @@ fn spawn_engine(app: tauri::AppHandle) {
 
   std::thread::spawn(move || loop {
     let mut cmd = Command::new(&node);
+    // Launch the REAL installed browser by default so the gov portal's F5/Shape
+    // anti-bot (the /TSbd beacon) sees a normal TLS fingerprint and serves the
+    // VNeID QR. Edge ships on every Win11 box; engine falls back to bundled
+    // Chromium if it's missing. Override/disable via OVERLAY_BROWSER_CHANNEL.
+    let channel = std::env::var("OVERLAY_BROWSER_CHANNEL").unwrap_or_else(|_| "msedge".to_string());
     cmd.arg(&entry)
       .env("API_BASE", &api_base)
       .env("ENGINE_ROLE", &role)
       .env("BROWSER_MODE", "hidden")
+      .env("OVERLAY_BROWSER_CHANNEL", &channel)
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
       .stderr(Stdio::inherit());

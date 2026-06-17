@@ -97,34 +97,64 @@ function pageInstaller(bindingName) {
     } catch (_) { /* ignore */ }
     return null;
   }
+  // Climb to a CUSTOM dropdown root (Ant Design / select2 / ARIA combobox). These
+  // render as <div>s, not <select>, so without this they'd record as a plain
+  // CLICK on a fixed value — never binding the citizen's data. Recording them as
+  // SELECT_OPTION lets the UI auto-bind {{citizen.province}} etc.
+  function selectLikeRoot(el) {
+    let n = el;
+    let depth = 0;
+    while (n && n.nodeType === 1 && depth < 4) {
+      const cn = (n.getAttribute && n.getAttribute('class')) || '';
+      const role = n.getAttribute && n.getAttribute('role');
+      const pop = n.getAttribute && n.getAttribute('aria-haspopup');
+      if (role === 'combobox' || pop === 'listbox' || /\bant-select\b/.test(cn) || /\bselect2\b/.test(cn)) return n;
+      n = n.parentElement;
+      depth++;
+    }
+    return null;
+  }
   function describe(el) {
-    const tag = el.tagName.toLowerCase();
-    const inputType = (el.getAttribute('type') || '').toLowerCase();
-    const r = buildSelector(el);
+    const sroot = el.tagName.toLowerCase() === 'select' ? null : selectLikeRoot(el);
+    const base = sroot || el;
+    const tag = base.tagName.toLowerCase();
+    const inputType = (base.getAttribute('type') || '').toLowerCase();
+    const r = buildSelector(base);
     const nonText = ['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image', 'range', 'color'];
-    const isInput = tag === 'textarea' || el.isContentEditable === true || (tag === 'input' && !nonText.includes(inputType));
+    const isInput = !sroot && (tag === 'textarea' || base.isContentEditable === true || (tag === 'input' && !nonText.includes(inputType)));
+    // For a custom dropdown the binding hint lives in the placeholder span, not an attribute.
+    let placeholder = base.getAttribute('placeholder');
+    if (!placeholder && sroot) {
+      const phEl = base.querySelector('.ant-select-selection-placeholder, [class*="placeholder"]');
+      if (phEl) placeholder = (phEl.textContent || '').trim().replace(/\s+/g, ' ');
+    }
     return {
       selector: r ? r.sel : null,
       selectorType: r ? r.type : 'CSS',
       tag,
       inputType,
       isInput,
-      isSelect: tag === 'select',
+      isSelect: tag === 'select' || !!sroot,
       isCheckable: tag === 'input' && (inputType === 'checkbox' || inputType === 'radio'),
-      text: (el.textContent || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 60),
-      name: el.getAttribute('name') || null,
-      elId: el.id || null,
-      ariaLabel: el.getAttribute('aria-label') || null,
-      label: resolveLabel(el),
-      placeholder: el.getAttribute('placeholder') || null,
-      href: el.getAttribute('href') || null,
+      text: (base.textContent || base.value || '').trim().replace(/\s+/g, ' ').slice(0, 60),
+      name: base.getAttribute('name') || null,
+      elId: base.id || null,
+      ariaLabel: base.getAttribute('aria-label') || null,
+      label: resolveLabel(base),
+      placeholder: placeholder || null,
+      href: base.getAttribute('href') || null,
     };
   }
 
   // Click capture — fires before the page handles it (capture phase) so a
   // navigating click still records its selector.
   document.addEventListener('click', (e) => {
-    const el = e.target && e.target.closest ? (e.target.closest('a,button,[role="button"],input,select,textarea,label') || e.target) : e.target;
+    // Picking an option inside an OPEN custom dropdown is part of the SELECT_OPTION
+    // step we already recorded when its trigger was clicked — don't record it as a
+    // separate, fixed-value CLICK (that would override the citizen-data binding).
+    if (e.target && e.target.closest &&
+        e.target.closest('[role="option"], .ant-select-item, .select2-results__option, .rc-virtual-list-holder')) return;
+    const el = e.target && e.target.closest ? (e.target.closest('a,button,[role="button"],input,select,textarea,label,[role="combobox"],.ant-select,.select2-container') || e.target) : e.target;
     if (!el || el.nodeType !== 1) return;
     const info = describe(el);
     if (info.selector) send(Object.assign({ kind: 'click' }, info));

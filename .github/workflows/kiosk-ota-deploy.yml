@@ -9,7 +9,7 @@ on:
     branches: [main]
     paths:
       - "kiosk_client/**"
-      - "packages/shared-types/**"
+      - "automation-core/**"
       - "scripts/set-version.mjs"
       - ".github/workflows/kiosk-ota-deploy.yml"
   workflow_dispatch:
@@ -70,12 +70,6 @@ jobs:
 
       - name: Stamp version into client
         run: node scripts/set-version.mjs ${{ steps.ver.outputs.version }}
-
-      - name: Build shared-types
-        shell: pwsh
-        run: |
-          npm --prefix packages/shared-types install --no-audit --no-fund
-          npm --prefix packages/shared-types run build
 
       - name: Install client dependencies
         working-directory: kiosk_client

@@ -123,28 +123,41 @@ async function waitForLogin(page, { successSel, successText, failText, timeout }
   return { ok: false, reason: 'timeout' };
 }
 
-/** Build a Playwright locator from a step's selector + selectorType. */
-function locate(page, step) {
+/** Build a Playwright locator from a step's selector + selectorType, in any
+ * frame `root` (a Page or a Frame — both expose the same locator API). */
+function locateIn(root, step) {
   const sel = step.selector;
   if (!sel) return null;
   switch (step.selectorType) {
-    case 'XPATH': return page.locator(`xpath=${sel}`);
-    case 'ID': return page.locator(`#${sel}`);
-    case 'NAME': return page.locator(`[name="${sel}"]`);
-    case 'TEXT': return page.getByText(sel, { exact: false });
-    case 'LINK_TEXT': return page.getByRole('link', { name: sel });
-    default: return page.locator(sel);
+    case 'XPATH': return root.locator(`xpath=${sel}`);
+    case 'ID': return root.locator(`#${sel}`);
+    case 'NAME': return root.locator(`[name="${sel}"]`);
+    case 'TEXT': return root.getByText(sel, { exact: false });
+    case 'LINK_TEXT': return root.getByRole('link', { name: sel });
+    default: return root.locator(sel);
   }
 }
 
-async function tryLocate(page, step) {
-  const primary = locate(page, step);
-  if (primary && (await primary.count()) > 0) return primary;
-  if (step.selectorAlt) {
-    const alt = page.locator(step.selectorAlt);
-    if ((await alt.count()) > 0) return alt;
+/** Find the element across ALL frames — dichvucong embeds the procedure form in
+ * an <iframe>, so a selector recorded inside it isn't in the main frame. Returns
+ * the matching { loc, root }; falls back to the main frame when nothing matches. */
+async function locateAcrossFrames(page, step) {
+  const frames = page.frames();
+  for (const root of frames) {
+    const loc = locateIn(root, step);
+    if (loc && (await loc.count().catch(() => 0)) > 0) return { loc, root };
   }
-  return primary;
+  if (step.selectorAlt) {
+    for (const root of frames) {
+      const loc = root.locator(step.selectorAlt);
+      if ((await loc.count().catch(() => 0)) > 0) return { loc, root };
+    }
+  }
+  return { loc: locateIn(page.mainFrame(), step), root: page.mainFrame() };
+}
+
+async function tryLocate(page, step) {
+  return (await locateAcrossFrames(page, step)).loc;
 }
 
 /**
@@ -192,26 +205,60 @@ async function executeStep(page, step, ctx, helpers) {
 
     case 'SELECT_OPTION':
     case 'SELECT': {
-      const loc = await tryLocate(page, step);
+      const { loc, root } = await locateAcrossFrames(page, step);
       const val = resolveTemplate(step.inputValue, ctx);
       if (!val) return {};
 
       const didNative = await selectNativeOption(loc, val, timeout).catch(() => false);
       if (didNative) return {};
 
+      // Custom dropdown (Ant Design / react-select / select2 / …). Open it, then
+      // — crucially — TYPE the value into its search box so long, VIRTUALISED lists
+      // (e.g. 63 provinces, only ~6 in the DOM at once) filter down to the match
+      // before we click. Without this, the target option is never in the DOM.
+      // All queries run on `root` (the frame the dropdown lives in — its popup
+      // portal renders into that same document).
       await loc.first().click({ timeout }).catch(() => undefined);
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(300);
+
+      const searchInput = root.locator([
+        '.ant-select-selection-search-input',
+        '.ant-select-search__field',
+        'input[role="combobox"]:not([readonly])',
+        'input[role="searchbox"]',
+        '.select2-search__field',
+        '.ant-select-dropdown input',
+      ].join(', ')).first();
+      if (await searchInput.count().catch(() => 0)) {
+        // .fill() is most reliable; some comboboxes are readOnly → type via keyboard.
+        await searchInput.fill(val, { timeout: 3000 }).catch(async () => {
+          await page.keyboard.type(val, { delay: 20 }).catch(() => undefined);
+        });
+        await page.waitForTimeout(600); // let the list filter / fetch
+      }
+
       const target = stripAdminPrefix(val);
-      const opt = page.locator('li, [role="option"], .option, .ant-select-item, .select2-results__option');
-      const count = await opt.count().catch(() => 0);
-      for (let i = 0; i < count; i++) {
-        const text = (await opt.nth(i).textContent().catch(() => '')) || '';
-        if (matchScore(text, val) >= 70 || stripAdminPrefix(text) === target) {
-          await opt.nth(i).click({ timeout }).catch(() => undefined);
+      const optSel = 'li[role="option"], [role="option"], .ant-select-item-option, .select2-results__option, .option, .ant-select-item, li';
+      const deadline = Date.now() + Math.min(timeout, 4000);
+      while (Date.now() < deadline) {
+        const opt = root.locator(optSel);
+        const count = await opt.count().catch(() => 0);
+        let best = { i: -1, score: 0 };
+        for (let i = 0; i < count; i++) {
+          const text = (await opt.nth(i).textContent().catch(() => '')) || '';
+          const score = matchScore(text, val);
+          if (score > best.score || (score > 0 && stripAdminPrefix(text) === target)) best = { i, score };
+        }
+        if (best.i >= 0 && best.score >= 50) {
+          await opt.nth(best.i).click({ timeout }).catch(() => undefined);
+          await page.waitForTimeout(150);
           return {};
         }
+        await page.waitForTimeout(300);
       }
-      await page.getByText(val, { exact: false }).first().click({ timeout }).catch(() => undefined);
+      // Last resort: pressing Enter accepts the top filtered option in most combos.
+      await page.keyboard.press('Enter').catch(() => undefined);
+      await page.getByText(val, { exact: false }).first().click({ timeout: 2000 }).catch(() => undefined);
       return {};
     }
 

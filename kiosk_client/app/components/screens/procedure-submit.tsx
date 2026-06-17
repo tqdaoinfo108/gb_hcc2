@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { TopBar } from "../ui";
 import { Icon } from "../icons";
 import { seleniumApi, workflowApi } from "../../lib/api";
-import { engineSend, onEngineMessage, onEngineStatus, isTauri } from "../../lib/engine-bridge";
+import { engineSend, onEngineMessage, onEngineStatus, isTauri, computeOverlayBounds, raiseOverlayBrowser } from "../../lib/engine-bridge";
 import { useBrowserOverlay } from "../../lib/use-browser-overlay";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -568,6 +568,11 @@ export function ProcedureSubmitScreen({
       if (disposed) return;
       if (msg.evt === "ready") {
         setHasScreenshot(true);
+        // The real window just opened — lift it above the fullscreen Tauri
+        // window right away (launch + first paint races the topmost flag).
+        void raiseOverlayBrowser();
+        window.setTimeout(() => void raiseOverlayBrowser(), 250);
+        window.setTimeout(() => void raiseOverlayBrowser(), 800);
       } else if (msg.evt === "progress") {
         onProgress(msg);
       } else if (msg.evt === "request-input") {
@@ -583,9 +588,17 @@ export function ProcedureSubmitScreen({
 
     // Kick off the job. The engine is normally already up (spawned at app start),
     // so send immediately; also (re)send if the engine (re)spawns after a crash.
-    engineSend({ cmd: "start-job", jobId: currentJobId });
+    // Send the frame's screen bounds so the engine opens Chromium DIRECTLY over
+    // the frame (no off-screen → on-screen jump, which left the frame white).
+    const begin = async () => {
+      let bounds = null;
+      const el = frameRef.current;
+      if (el) bounds = await computeOverlayBounds(el);
+      if (!disposed) engineSend({ cmd: "start-job", jobId: currentJobId, bounds: bounds ?? undefined });
+    };
+    void begin();
     const offStatus = onEngineStatus(({ ready }) => {
-      if (ready && !disposed) engineSend({ cmd: "start-job", jobId: currentJobId });
+      if (ready && !disposed) void begin();
     });
 
     return () => {

@@ -411,7 +411,8 @@ function KioskApp() {
   /* Ctrl+Alt+F2 → windowed dev mode (Tauri) or dev overlay (browser) */
   useEffect(() => {
     const handler = async (e: KeyboardEvent) => {
-      if (!e.ctrlKey || !e.altKey || e.key !== "F2") return;
+      // Match on code too — with Alt held, some layouts report a different `key`.
+      if (!e.ctrlKey || !e.altKey || (e.key !== "F2" && e.code !== "F2")) return;
       e.preventDefault();
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {

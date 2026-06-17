@@ -68,7 +68,14 @@ async function launchAppWindow({ url, bounds }) {
     '--no-default-browser-check',
     '--disable-features=Translate,TranslateUI',
   ];
-  const context = await chromium.launchPersistentContext(profileDir, {
+  // The gov portal sits behind an F5/Shape anti-bot (the /TSbd/…?type=2 beacon).
+  // It fingerprints Playwright's bundled Chromium at the TLS/automation layer and
+  // RESETS the connection, so dynamic content (the VNeID QR) never loads. Launching
+  // the REAL installed browser (Edge is always present on Win11, or Chrome) makes
+  // the TLS/JA3 fingerprint match a "normal" browser. Set OVERLAY_BROWSER_CHANNEL
+  // = 'msedge' | 'chrome' | 'chrome-beta' …; empty → Playwright's bundled Chromium.
+  const channel = (process.env.OVERLAY_BROWSER_CHANNEL || '').trim() || undefined;
+  const baseOpts = {
     headless: false,
     args,
     // Drop Playwright's automation flag so navigator.webdriver isn't trivially
@@ -77,11 +84,45 @@ async function launchAppWindow({ url, bounds }) {
     viewport: null, // null → page fills the real chromeless window size
     locale: 'vi-VN',
     hasTouch: true,
-  });
+  };
+  // Preference order — each falls back to the next only if launch FAILS, never
+  // because of the QR (the QR depends on the TLS/anti-bot layer, not the sandbox):
+  //   1. real browser + sandbox  → looks most human (NO --no-sandbox flag, which
+  //      is itself an automation tell the anti-bot can read), no warning bar.
+  //   2. bundled Chromium + sandbox.
+  //   3/4. same but sandbox OFF — last resort so the kiosk never fails to launch
+  //        (this re-adds --no-sandbox + its warning bar; only used if 1&2 can't start).
+  const candidates = [];
+  if (channel) candidates.push({ label: `${channel}+sandbox`, opts: { ...baseOpts, channel, chromiumSandbox: true } });
+  candidates.push({ label: 'bundled+sandbox', opts: { ...baseOpts, chromiumSandbox: true } });
+  if (channel) candidates.push({ label: `${channel}+no-sandbox`, opts: { ...baseOpts, channel, chromiumSandbox: false } });
+  candidates.push({ label: 'bundled+no-sandbox', opts: { ...baseOpts, chromiumSandbox: false } });
+
+  let context = null;
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    try {
+      // Fresh profile dir per attempt so a half-started launch can't lock the next.
+      context = await chromium.launchPersistentContext(`${profileDir}-${i}`, c.opts);
+      console.error('[engine] launched browser:', c.label);
+      break;
+    } catch (e) {
+      console.error(`[engine] launch '${c.label}' failed: ${e && e.message}`);
+    }
+  }
+  if (!context) throw new Error('Không khởi động được trình duyệt overlay (mọi phương án đều thất bại).');
+  // Mask the most-checked automation signals. Init scripts run before page JS in
+  // EVERY frame (incl. the cross-origin SSO iframe where the QR/anti-bot lives),
+  // so this lands even though we keep the natural --app=url load (no CDP goto).
+  await context.addInitScript(() => {
+    try { Object.defineProperty(navigator, 'webdriver', { get: () => false }); } catch { /* sealed */ }
+    try { if (!window.chrome) window.chrome = { runtime: {} }; } catch { /* ignore */ }
+  }).catch(() => undefined);
   // The --app window is the page of the persistent context. Prefer a real
   // (non-blank) page in case Chromium also opened a stray about:blank.
   let page = context.pages().find((p) => !p.url().startsWith('about:')) || context.pages()[0];
   if (!page) page = await context.waitForEvent('page', { timeout: 15000 });
+  console.error('[engine] launchAppWindow opened', context.pages().length, 'page(s); using', page.url(), '@', `${Math.round(b.left)},${Math.round(b.top)} ${Math.round(b.width)}x${Math.round(b.height)}`);
   // Close any extra blank windows so only the app window remains on-screen.
   for (const p of context.pages()) {
     if (p !== page && p.url().startsWith('about:')) p.close().catch(() => undefined);
