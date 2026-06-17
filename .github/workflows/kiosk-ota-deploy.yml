@@ -73,7 +73,11 @@ jobs:
 
       - name: Install client dependencies
         working-directory: kiosk_client
-        run: npm ci --no-audit --no-fund
+        # --no-workspaces: build kiosk_client standalone (it has its own lockfile),
+        #   ignoring the repo-root workspace so npm doesn't pull in api/cms/etc.
+        # npm install (not ci): tolerates the per-run version stamp (set-version →
+        #   kiosk 1.0.<run>), which a committed lockfile can never match.
+        run: npm install --no-workspaces --no-audit --no-fund
 
       - name: Build Windows MSI
         working-directory: kiosk_client

@@ -111,7 +111,6 @@ $env:NEXT_PUBLIC_API_URL = $ReleaseApiUrl
 $env:NEXT_PUBLIC_WS_URL  = $ReleaseWsUrl
 
 Invoke-Checked $Root "node scripts\sync-env.mjs"
-Invoke-Checked (Join-Path $Root "packages\shared-types") "npm run build"
 Invoke-Checked (Join-Path $Root "kiosk_api") "npm run build"
 Invoke-Checked (Join-Path $Root "kiosk_cms") "npm run build"
 Invoke-Checked (Join-Path $Root "kiosk_client") "npm run build"
@@ -129,15 +128,6 @@ Copy-FileIfExists (Join-Path $Root ".env.example") (Join-Path $OutputDir ".env.e
 Copy-AppRuntime "kiosk_api" @("dist", "prisma", "uploads")
 Copy-AppRuntime "kiosk_cms" @(".next", "public", "prisma") @("package.json", "package-lock.json", "next.config.ts")
 Copy-AppRuntime "kiosk_client" @(".next", "public") @("package.json", "package-lock.json", "next.config.ts", "device.json")
-Copy-AppRuntime "kiosk_runner" @("src")
-
-$SharedTarget = Join-Path $OutputDir "packages\shared-types"
-New-Item -ItemType Directory -Force -Path $SharedTarget | Out-Null
-Copy-FileIfExists (Join-Path $Root "packages\shared-types\package.json") (Join-Path $SharedTarget "package.json")
-Copy-DirIfExists (Join-Path $Root "packages\shared-types\dist") (Join-Path $SharedTarget "dist")
-if ($IncludeNodeModules) {
-  Copy-DirIfExists (Join-Path $Root "packages\shared-types\node_modules") (Join-Path $SharedTarget "node_modules")
-}
 
 $InstallDeps = @'
 @echo off
@@ -154,29 +144,21 @@ if errorlevel 1 (
 echo Installing runtime dependencies. This is only needed once per server/update.
 
 echo.
-echo [1/4] Backend dependencies
+echo [1/3] Backend dependencies
 cd /d "%~dp0kiosk_api"
 call npm ci
 if errorlevel 1 exit /b 1
 
 echo.
-echo [2/4] CMS dependencies
+echo [2/3] CMS dependencies
 cd /d "%~dp0kiosk_cms"
 call npm ci
 if errorlevel 1 exit /b 1
 
 echo.
-echo [3/4] Client dependencies
+echo [3/3] Client dependencies
 cd /d "%~dp0kiosk_client"
 call npm ci
-if errorlevel 1 exit /b 1
-
-echo.
-echo [4/4] Runner dependencies and browser
-cd /d "%~dp0kiosk_runner"
-call npm ci
-if errorlevel 1 exit /b 1
-call npx playwright install chromium
 if errorlevel 1 exit /b 1
 
 echo.
@@ -218,17 +200,6 @@ npm run start
 '@
 Set-Content -Path (Join-Path $OutputDir "run-client.bat") -Value $RunClient -Encoding ASCII
 
-$RunRunner = @'
-@echo off
-setlocal EnableExtensions
-cd /d "%~dp0kiosk_runner"
-set API_BASE=http://localhost:3001
-set RUNNER_ID=runner-01
-set BROWSER_MODE=hidden
-npm start
-'@
-Set-Content -Path (Join-Path $OutputDir "run-runner.bat") -Value $RunRunner -Encoding ASCII
-
 $StartAll = @'
 @echo off
 setlocal EnableExtensions
@@ -253,23 +224,19 @@ set API_PORT=3001
 set CMS_PORT=3002
 set KIOSK_PORT=3000
 set API_BASE=http://localhost:3001
-set RUNNER_ID=runner-01
-set BROWSER_MODE=hidden
 
 echo Starting Smart Kiosk services...
 echo Backend    : http://localhost:3001
 echo Admin CMS  : http://localhost:3002
 echo Client     : http://localhost:3000
-echo Runner     : runner-01
 echo.
 
 start "HCC Backend :3001" cmd /k call "%~dp0run-backend.bat"
 timeout /t 3 /nobreak >nul
 start "HCC Admin CMS :3002" cmd /k call "%~dp0run-cms.bat"
 start "HCC Client :3000" cmd /k call "%~dp0run-client.bat"
-start "HCC Runner" cmd /k call "%~dp0run-runner.bat"
 
-echo All services launched. Use stop-all.bat to stop ports 3000, 3001, 3002 and the runner.
+echo All services launched. Use stop-all.bat to stop ports 3000, 3001, 3002.
 pause
 '@
 Set-Content -Path (Join-Path $OutputDir "start-all.bat") -Value $StartAll -Encoding ASCII
@@ -281,7 +248,7 @@ cd /d "%~dp0"
 
 echo Stopping Smart Kiosk services...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ports = @(3000,3001,3002); foreach ($port in $ports) { Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { if ($_ -and $_ -ne 0) { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } } }; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and ($_.CommandLine -match 'kiosk_runner|src[/\\]runner\.js') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+  "$ports = @(3000,3001,3002); foreach ($port in $ports) { Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { if ($_ -and $_ -ne 0) { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } } }"
 
 echo Done.
 pause
@@ -296,7 +263,6 @@ Ports:
 - Backend API: http://localhost:3001
 - Admin CMS:   http://localhost:3002
 - Client:      http://localhost:3000
-- Runner:      runner-01, API_BASE=http://localhost:3001
 
 Deploy nhanh:
 1. Build local:
